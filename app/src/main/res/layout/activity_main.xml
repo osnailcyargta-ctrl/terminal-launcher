@@ -5,9 +5,87 @@
     android:orientation="vertical"
     android:background="#0a0a0a">
 
-    <WebView
-        android:id="@+id/webview"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="4dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/tvClock"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="00:00"
+            android:textSize="36sp"
+            android:textStyle="bold"
+            android:fontFamily="monospace"
+            android:textColor="#00ff88"/>
+
+        <TextView
+            android:id="@+id/tvOutput"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0 apps"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:textColor="#007740"/>
+
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="8dp"
+        android:clipToPadding="false"/>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1a1a1a"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:gravity="center_vertical"
+        android:background="#0d0d0d">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="&#10095; "
+            android:textSize="14sp"
+            android:fontFamily="monospace"
+            android:textColor="#004422"/>
+
+        <EditText
+            android:id="@+id/etInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@null"
+            android:hint="type a command..."
+            android:textColor="#00ff88"
+            android:textColorHint="#003318"
+            android:textSize="14sp"
+            android:fontFamily="monospace"
+            android:inputType="text"
+            android:imeOptions="actionGo"
+            android:maxLines="1"
+            android:importantForAutofill="no"/>
+
+    </LinearLayout>
 
 </LinearLayout>
