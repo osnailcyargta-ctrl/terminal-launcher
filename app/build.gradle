@@ -28,5 +28,5 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
+    // No appcompat needed — using plain android.app.Activity
 }
