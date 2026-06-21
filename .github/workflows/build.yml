@@ -25,11 +25,11 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build Release APK
-      run: ./gradlew assembleRelease
+      run: ./gradlew assembleRelease --no-daemon
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: terminal-launcher-apk
+        name: terminal-launcher-v2
         path: app/build/outputs/apk/release/app-release.apk
         retention-days: 30
