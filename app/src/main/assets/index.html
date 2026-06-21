@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Launcher</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-alt: #111111;
+    --text: #00ff88;
+    --text-dim: #007740;
+    --text-muted: #004422;
+    --cursor: #00ff88;
+    --accent: #00cc66;
+    --err: #ff4455;
+    --warn: #ffaa00;
+    --info: #44aaff;
+    --font: 'Courier New', 'Lucida Console', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  body::after { content: ''; position: fixed; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.05) 2px, rgba(0,0,0,0.05) 4px); pointer-events: none; z-index: 999; }
+  #statusbar { padding: 4px 12px; background: var(--bg-alt); border-bottom: 1px solid var(--text-muted); display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+  #statusbar .left { display: flex; gap: 16px; }
+  #terminal { flex: 1; overflow-y: auto; padding: 12px; scroll-behavior: smooth; }
+  #terminal::-webkit-scrollbar { width: 4px; }
+  #terminal::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 2px; }
+  .line { line-height: 1.6; white-space: pre-wrap; word-break: break-all; animation: fadein 0.1s ease; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; } }
+  .line.prompt { color: var(--text); }
+  .line.output { color: var(--text-dim); }
+  .line.success { color: var(--accent); }
+  .line.error { color: var(--err); }
+  .line.warn { color: var(--warn); }
+  .line.info { color: var(--info); }
+  .line.system { color: var(--text-muted); font-size: 12px; }
+  .line.app-name { color: var(--text); }
+  .line.blank { height: 8px; }
+  .prompt-prefix { color: var(--text-muted); }
+  #inputbar { display: flex; align-items: center; padding: 8px 12px; border-top: 1px solid var(--text-muted); background: var(--bg-alt); gap: 6px; flex-shrink: 0; }
+  .prompt-symbol { color: var(--text-dim); user-select: none; flex-shrink: 0; }
+  #input { flex: 1; background: transparent; border: none; outline: none; color: var(--text); font-family: var(--font); font-size: 14px; caret-color: var(--cursor); }
+  #settings-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; }
+  #settings-modal.open { display: flex; }
+  #settings-box { background: var(--bg-alt); border: 1px solid var(--text-muted); width: 320px; font-family: var(--font); font-size: 13px; }
+  #settings-header { padding: 8px 14px; border-bottom: 1px solid var(--text-muted); color: var(--text-dim); font-size: 11px; display: flex; justify-content: space-between; }
+  .setting-item { padding: 10px 14px; border-bottom: 1px solid #1a1a1a; color: var(--text-dim); }
+  .setting-label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .setting-value { color: var(--accent); }
+  .color-picker-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .color-picker-row input[type=color] { width: 32px; height: 22px; border: 1px solid var(--text-muted); background: transparent; padding: 1px; cursor: pointer; }
+  .color-btn { background: transparent; border: 1px solid var(--text-muted); color: var(--text-dim); font-family: var(--font); font-size: 11px; padding: 3px 8px; cursor: pointer; }
+  .wallpaper-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
+  .wp-option { height: 36px; border: 2px solid transparent; cursor: pointer; }
+  .wp-option:hover, .wp-option.active { border-color: var(--text); }
+  .settings-close { background: transparent; border: none; color: var(--text-muted); font-family: var(--font); cursor: pointer; font-size: 13px; }
+  #wallpaper-layer { position: fixed; inset: 0; z-index: -1; opacity: 0.15; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="wallpaper-layer"></div>
+<div id="statusbar">
+  <div class="left"><span id="stat-apps">0 apps</span></div>
+  <div class="right" id="stat-time"></div>
+</div>
+<div id="terminal"></div>
+<div id="inputbar">
+  <span class="prompt-symbol">&#10095;</span>
+  <input id="input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus>
+</div>
+<div id="settings-modal">
+  <div id="settings-box">
+    <div id="settings-header">
+      <span>launcher.setting</span>
+      <button class="settings-close" onclick="closeSettings()">&#x2715;</button>
+    </div>
+    <div class="setting-item">
+      <div class="setting-label">terminal background color</div>
+      <div class="color-picker-row">
+        <input type="color" id="pick-bg" value="#0a0a0a" oninput="applyBg(this.value)">
+        <span class="setting-value" id="lbl-bg">#0a0a0a</span>
+        <button class="color-btn" onclick="resetBg()">reset</button>
+      </div>
+    </div>
+    <div class="setting-item">
+      <div class="setting-label">text color</div>
+      <div class="color-picker-row">
+        <input type="color" id="pick-text" value="#00ff88" oninput="applyText(this.value)">
+        <span class="setting-value" id="lbl-text">#00ff88</span>
+        <button class="color-btn" onclick="resetText()">reset</button>
+      </div>
+    </div>
+    <div class="setting-item">
+      <div class="setting-label">terminal background / wallpaper</div>
+      <div class="wallpaper-grid" id="wp-grid"></div>
+    </div>
+  </div>
+</div>
+<script>
+var state = { apps: [], history: [], histIdx: -1, settings: {} };
+try { state.apps = JSON.parse(localStorage.getItem('launcher_apps') || '[]'); } catch(e) { state.apps = []; }
+try { state.settings = JSON.parse(localStorage.getItem('launcher_settings') || '{}'); } catch(e) { state.settings = {}; }
+
+var wallpapers = [
+  { label: 'none', css: 'none' },
+  { label: 'grid', css: 'repeating-linear-gradient(#00ff8808 1px, transparent 1px), repeating-linear-gradient(90deg, #00ff8808 1px, transparent 1px)', bgSize: '40px 40px' },
+  { label: 'dots', css: 'radial-gradient(circle, #00ff8820 1px, transparent 1px)', bgSize: '24px 24px' },
+  { label: 'circuit', css: 'repeating-linear-gradient(45deg, #00ff8812 0, #00ff8812 1px, transparent 0, transparent 50%)', bgSize: '10px 10px' },
+  { label: 'scan', css: 'repeating-linear-gradient(0deg, #00ff8808 0px, #00ff8808 1px, transparent 1px, transparent 6px)' },
+  { label: 'rain', css: 'repeating-linear-gradient(180deg, #00ff8810 0px, #00ff8810 1px, transparent 1px, transparent 20px)', bgSize: '8px 20px' },
+  { label: 'hex', css: 'radial-gradient(circle at 50% 50%, #00ff8815 2px, transparent 2px)', bgSize: '30px 52px' },
+  { label: 'cross', css: 'repeating-linear-gradient(#00ff8806 0, #00ff8806 1px, transparent 0, transparent 50%), repeating-linear-gradient(90deg, #00ff8806 0, #00ff8806 1px, transparent 0, transparent 50%)', bgSize: '20px 20px' }
+];
+
+var knownPkgs = {
+  'mobile legend':'com.mobile.legends','mobile legends':'com.mobile.legends','ml':'com.mobile.legends',
+  'whatsapp':'com.whatsapp','wa':'com.whatsapp',
+  'youtube':'com.google.android.youtube','yt':'com.google.android.youtube',
+  'chrome':'com.android.chrome','instagram':'com.instagram.android','ig':'com.instagram.android',
+  'tiktok':'com.zhiliaoapp.musically','twitter':'com.twitter.android','x':'com.twitter.android',
+  'spotify':'com.spotify.music','maps':'com.google.android.apps.maps',
+  'gojek':'com.gojek.app','grab':'com.grabtaxi.passenger',
+  'shopee':'com.shopee.id','tokopedia':'com.tokopedia.tkpd',
+  'gmail':'com.google.android.gm','settings':'com.android.settings',
+  'camera':'com.android.camera2','gallery':'com.android.gallery3d',
+  'play store':'com.android.vending','store':'com.android.vending',
+  'phone':'com.android.phone','contacts':'com.android.contacts',
+  'clock':'com.android.deskclock','calculator':'com.android.calculator2'
+};
+
+function printLine(text, cls) {
+  cls = cls || 'output';
+  var term = document.getElementById('terminal');
+  var div = document.createElement('div');
+  div.className = 'line ' + cls;
+  div.textContent = String(text);
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+function printPrompt(cmd) {
+  var term = document.getElementById('terminal');
+  var div = document.createElement('div');
+  div.className = 'line prompt';
+  div.innerHTML = '<span class="prompt-prefix">&#10095; </span>' + escHtml(cmd);
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function handleCommand(raw) {
+  var input = raw.trim();
+  if (!input) return;
+  state.history.unshift(input);
+  state.histIdx = -1;
+  printPrompt(input);
+  var lower = input.toLowerCase().trim();
+
+  if (lower === 'help') {
+    cmdHelp();
+  } else if (lower === 'list') {
+    cmdList();
+  } else if (lower === 'clear' || lower === 'cls') {
+    document.getElementById('terminal').innerHTML = '';
+    return;
+  } else if (lower === 'open launcher.setting') {
+    openSettings();
+  } else if (lower.substring(0, 4) === 'run ') {
+    var appName = input.substring(4).trim();
+    if (appName.length > 0) cmdRun(appName);
+    else printLine('usage: run <app name>', 'warn');
+  } else if (lower.substring(0, 7) === 'delete ') {
+    var delName = input.substring(7).trim();
+    if (delName.length > 0) cmdDelete(delName);
+    else printLine('usage: delete <app name>', 'warn');
+  } else {
+    printLine('unknown: ' + input, 'error');
+  }
+  printLine('', 'blank');
+}
+
+function cmdHelp() {
+  printLine('commands:', 'info');
+  printLine('  run <app>              launch / install app', 'output');
+  printLine('  delete <app>           remove app from launcher', 'output');
+  printLine('  list                   show all installed apps', 'output');
+  printLine('  open launcher.setting  settings panel', 'output');
+  printLine('  clear                  clear terminal', 'output');
+  printLine('  help                   show commands', 'output');
+}
+
+function cmdList() {
+  if (state.apps.length === 0) {
+    printLine('no apps installed.', 'output');
+    return;
+  }
+  printLine(state.apps.length + ' app(s):', 'info');
+  for (var i = 0; i < state.apps.length; i++) {
+    var num = (i + 1 < 10 ? '0' : '') + (i + 1);
+    printLine('  ' + num + '  ' + state.apps[i].name, 'app-name');
+  }
+}
+
+function cmdRun(appName) {
+  var norm = appName.toLowerCase().trim();
+  var existing = null;
+  for (var i = 0; i < state.apps.length; i++) {
+    if (state.apps[i].name.toLowerCase().trim() === norm) { existing = state.apps[i]; break; }
+  }
+  if (!existing) {
+    state.apps.push({ name: appName, installed: Date.now(), opens: 1 });
+    saveApps();
+    updateStatusbar();
+    printLine('installing ' + appName + '...', 'warn');
+    var _name = appName;
+    setTimeout(function() {
+      printLine('installed ' + _name + '.', 'success');
+      setTimeout(function() { launchApp(_name); }, 300);
+    }, 500);
+  } else {
+    existing.opens = (existing.opens || 0) + 1;
+    existing.lastOpen = Date.now();
+    saveApps();
+    launchApp(appName);
+  }
+}
+
+function launchApp(name) {
+  var pkg = knownPkgs[name.toLowerCase().trim()] || null;
+  printLine('launching ' + name + '...', 'output');
+  var _name = name, _pkg = pkg;
+  setTimeout(function() {
+    if (typeof Android !== 'undefined' && Android.launchApp) {
+      Android.launchApp(_pkg || _name);
+    } else {
+      window.location.href = 'launcher://launch?pkg=' + encodeURIComponent(_pkg || _name) + '&name=' + encodeURIComponent(_name);
+    }
+    printLine(_name + ' opened.', 'success');
+  }, 350);
+}
+
+function cmdDelete(appName) {
+  var norm = appName.toLowerCase().trim();
+  var idx = -1;
+  for (var i = 0; i < state.apps.length; i++) {
+    if (state.apps[i].name.toLowerCase().trim() === norm) { idx = i; break; }
+  }
+  if (idx === -1) { printLine(appName + ': not found.', 'error'); return; }
+  var removed = state.apps.splice(idx, 1)[0];
+  saveApps();
+  updateStatusbar();
+  printLine(removed.name + ' removed.', 'success');
+}
+
+function saveApps() { try { localStorage.setItem('launcher_apps', JSON.stringify(state.apps)); } catch(e) {} }
+function saveSettings() { try { localStorage.setItem('launcher_settings', JSON.stringify(state.settings)); } catch(e) {} }
+function updateStatusbar() { document.getElementById('stat-apps').textContent = state.apps.length + ' app' + (state.apps.length !== 1 ? 's' : ''); }
+function updateClock() { var n=new Date(); document.getElementById('stat-time').textContent=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0'); }
+
+function openSettings() { document.getElementById('settings-modal').classList.add('open'); }
+function closeSettings() { document.getElementById('settings-modal').classList.remove('open'); printLine('settings closed.', 'system'); printLine('', 'blank'); }
+
+function hexPart(hex, start) { return parseInt(hex.slice(start, start+2), 16) || 0; }
+function toHex(r,g,b) { return '#'+Math.min(255,Math.max(0,r)).toString(16).padStart(2,'0')+Math.min(255,Math.max(0,g)).toString(16).padStart(2,'0')+Math.min(255,Math.max(0,b)).toString(16).padStart(2,'0'); }
+
+function applyBg(val) {
+  document.documentElement.style.setProperty('--bg', val);
+  var r=hexPart(val,1),g=hexPart(val,3),b=hexPart(val,5);
+  document.documentElement.style.setProperty('--bg-alt', toHex(r+10,g+10,b+10));
+  document.getElementById('lbl-bg').textContent = val;
+  state.settings.bg = val; saveSettings();
+}
+function applyText(val) {
+  document.documentElement.style.setProperty('--text', val);
+  document.documentElement.style.setProperty('--accent', val);
+  document.documentElement.style.setProperty('--cursor', val);
+  var r=hexPart(val,1),g=hexPart(val,3),b=hexPart(val,5);
+  document.documentElement.style.setProperty('--text-dim', toHex(Math.round(r*.5),Math.round(g*.5),Math.round(b*.5)));
+  document.documentElement.style.setProperty('--text-muted', toHex(Math.round(r*.25),Math.round(g*.25),Math.round(b*.25)));
+  document.getElementById('lbl-text').textContent = val;
+  state.settings.text = val; saveSettings();
+}
+function resetBg() { document.getElementById('pick-bg').value='#0a0a0a'; applyBg('#0a0a0a'); }
+function resetText() { document.getElementById('pick-text').value='#00ff88'; applyText('#00ff88'); }
+
+function buildWpGrid() {
+  var grid = document.getElementById('wp-grid');
+  var saved = state.settings.wpIdx || 0;
+  for (var i = 0; i < wallpapers.length; i++) {
+    (function(idx) {
+      var wp = wallpapers[idx];
+      var div = document.createElement('div');
+      div.className = 'wp-option' + (idx === saved ? ' active' : '');
+      div.title = wp.label;
+      if (wp.css === 'none') { div.style.background = '#0a0a0a'; div.style.border = '2px solid #333'; }
+      else { div.style.backgroundImage = wp.css; if (wp.bgSize) div.style.backgroundSize = wp.bgSize; }
+      div.onclick = function() { applyWallpaper(idx); };
+      grid.appendChild(div);
+    })(i);
+  }
+}
+
+function applyWallpaper(idx) {
+  var wp = wallpapers[idx];
+  var layer = document.getElementById('wallpaper-layer');
+  var opts = document.querySelectorAll('.wp-option');
+  for (var i=0;i<opts.length;i++) opts[i].classList.toggle('active', i===idx);
+  if (wp.css === 'none') { layer.style.backgroundImage = 'none'; }
+  else { layer.style.backgroundImage = wp.css; layer.style.backgroundSize = wp.bgSize || ''; }
+  state.settings.wpIdx = idx; saveSettings();
+}
+
+function applySavedSettings() {
+  if (state.settings.bg) { document.getElementById('pick-bg').value = state.settings.bg; applyBg(state.settings.bg); }
+  if (state.settings.text) { document.getElementById('pick-text').value = state.settings.text; applyText(state.settings.text); }
+  if (state.settings.wpIdx != null) applyWallpaper(state.settings.wpIdx);
+}
+
+function init() {
+  applySavedSettings();
+  buildWpGrid();
+  updateClock();
+  setInterval(updateClock, 1000);
+  updateStatusbar();
+  var boot = [
+    ['----------------------------', 'system'],
+    ['  PERSONAL LAUNCHER  v1.0', 'system'],
+    ['----------------------------', 'system'],
+    ['', 'blank']
+  ];
+  for (var i=0;i<boot.length;i++) {
+    (function(t, c, delay) { setTimeout(function() { printLine(t, c); }, delay); })(boot[i][0], boot[i][1], i*40);
+  }
+  if (state.apps.length > 0) {
+    setTimeout(function() {
+      printLine(state.apps.length + ' app(s) installed.', 'system');
+      printLine('', 'blank');
+    }, boot.length * 40 + 80);
+  }
+}
+
+var inputEl = document.getElementById('input');
+inputEl.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    var val = inputEl.value;
+    inputEl.value = '';
+    handleCommand(val);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (state.histIdx < state.history.length - 1) { state.histIdx++; inputEl.value = state.history[state.histIdx]; }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (state.histIdx > 0) { state.histIdx--; inputEl.value = state.history[state.histIdx]; }
+    else { state.histIdx = -1; inputEl.value = ''; }
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    var p = inputEl.value.toLowerCase();
+    if (p.substring(0,4) === 'run ') {
+      var q = p.slice(4);
+      for (var i=0;i<state.apps.length;i++) {
+        if (state.apps[i].name.toLowerCase().substring(0,q.length) === q) { inputEl.value = 'run ' + state.apps[i].name; break; }
+      }
+    }
+  }
+});
+document.addEventListener('click', function() { inputEl.focus(); });
+document.addEventListener('touchend', function() { setTimeout(function(){ inputEl.focus(); }, 100); });
+document.getElementById('settings-modal').addEventListener('click', function(e) { if (e.target === this) closeSettings(); });
+init();
+</script>
+</body>
+</html>
