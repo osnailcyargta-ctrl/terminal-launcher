@@ -8,6 +8,7 @@
     android:background="#0a0a0a">
 
     <LinearLayout
+        android:id="@+id/statusBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -39,6 +40,7 @@
     </LinearLayout>
 
     <View
+        android:id="@+id/statusDivider"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="#1a1a1a"/>
@@ -53,13 +55,18 @@
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
         android:clipToPadding="false"
-        android:scrollbars="none">
+        android:scrollbars="none"
+        android:focusable="false"
+        android:focusableInTouchMode="false"
+        android:descendantFocusability="blocksDescendants">
 
         <LinearLayout
             android:id="@+id/termOutput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"/>
+            android:orientation="vertical"
+            android:focusable="false"
+            android:focusableInTouchMode="false"/>
 
     </ScrollView>
 
@@ -88,7 +95,8 @@
             android:text="&#10095; "
             android:textSize="13sp"
             android:fontFamily="monospace"
-            android:textColor="#004422"/>
+            android:textColor="#004422"
+            android:focusable="false"/>
 
         <EditText
             android:id="@+id/etInput"
