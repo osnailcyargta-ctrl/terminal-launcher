@@ -1,63 +1,65 @@
 package com.osnailcyargta.launcher
 
-import android.animation.*
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
+import android.text.SpannableString
 import android.text.TextWatcher
+import android.text.style.ForegroundColorSpan
 import android.view.*
 import android.view.animation.DecelerateInterpolator
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import java.util.Calendar
 
-data class AppInfo(val label: String, val packageName: String, val icon: android.graphics.drawable.Drawable)
+data class AppInfo(val label: String, val packageName: String)
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
-    private lateinit var rv: RecyclerView
+    private lateinit var termOutput: LinearLayout
+    private lateinit var scrollView: ScrollView
     private lateinit var etInput: EditText
-    private lateinit var tvOutput: TextView
     private lateinit var tvClock: TextView
-    private var allApps: List<AppInfo> = emptyList()
-    private var filteredApps: List<AppInfo> = emptyList()
-    private lateinit var adapter: AppAdapter
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private lateinit var tvStatus: TextView
 
-    // Colors
-    private var bgColor = Color.parseColor("#0a0a0a")
-    private var textColor = Color.parseColor("#00ff88")
+    private var allApps: List<AppInfo> = emptyList()
+    private val handler = Handler(Looper.getMainLooper())
+
+    // Theme colors - persisted
+    private var bgColor  = Color.parseColor("#0a0a0a")
+    private var txtColor = Color.parseColor("#00ff88")
+
+    // command history
+    private val history = mutableListOf<String>()
+    private var histIdx = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("launcher_prefs", MODE_PRIVATE)
-        bgColor = prefs.getInt("bg_color", Color.parseColor("#0a0a0a"))
-        textColor = prefs.getInt("text_color", Color.parseColor("#00ff88"))
+        prefs    = getSharedPreferences("lp", MODE_PRIVATE)
+        bgColor  = prefs.getInt("bg",  Color.parseColor("#0a0a0a"))
+        txtColor = prefs.getInt("txt", Color.parseColor("#00ff88"))
 
         setContentView(R.layout.activity_main)
+
+        termOutput = findViewById(R.id.termOutput)
+        scrollView = findViewById(R.id.scrollView)
+        etInput    = findViewById(R.id.etInput)
+        tvClock    = findViewById(R.id.tvClock)
+        tvStatus   = findViewById(R.id.tvStatus)
+
         applyTheme()
-
-        rv = findViewById(R.id.rv)
-        etInput = findViewById(R.id.etInput)
-        tvOutput = findViewById(R.id.tvOutput)
-        tvClock = findViewById(R.id.tvClock)
-
-        adapter = AppAdapter(
-            onLaunch = { launchApp(it) },
-            onLongPress = { app, anchor -> showAppMenu(app, anchor) }
-        )
-        rv.layoutManager = GridLayoutManager(this, 4)
-        rv.adapter = adapter
-
         startClock()
-        loadApps()
         setupInput()
+        boot()
+        loadApps()
     }
 
     override fun onResume() {
@@ -65,19 +67,37 @@ class MainActivity : AppCompatActivity() {
         loadApps()
     }
 
+    // ── THEME ────────────────────────────────────────────────────────────────
+
     private fun applyTheme() {
-        val root = window.decorView.findViewById<View>(android.R.id.content)
-        root?.setBackgroundColor(bgColor)
-        window.statusBarColor = bgColor
+        val root = findViewById<View>(R.id.root)
+        root.setBackgroundColor(bgColor)
+        window.statusBarColor     = bgColor
         window.navigationBarColor = bgColor
+
+        tvClock.setTextColor(dim(txtColor, 0.9f))
+        tvStatus.setTextColor(dim(txtColor, 0.4f))
+        etInput.setTextColor(txtColor)
+        etInput.setHintTextColor(dim(txtColor, 0.25f))
+
+        val promptArrow = findViewById<TextView>(R.id.tvPrompt)
+        promptArrow.setTextColor(dim(txtColor, 0.35f))
+
+        val inputBar = findViewById<View>(R.id.inputBar)
+        inputBar.setBackgroundColor(darken(bgColor, 6))
+
+        val divider = findViewById<View>(R.id.divider)
+        divider.setBackgroundColor(dim(txtColor, 0.1f))
     }
+
+    // ── CLOCK ────────────────────────────────────────────────────────────────
 
     private fun startClock() {
         val tick = object : Runnable {
             override fun run() {
-                val now = java.util.Calendar.getInstance()
-                val h = now.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
-                val m = now.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
+                val c = Calendar.getInstance()
+                val h = c.get(Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+                val m = c.get(Calendar.MINUTE).toString().padStart(2, '0')
                 tvClock.text = "$h:$m"
                 handler.postDelayed(this, 10_000)
             }
@@ -85,542 +105,574 @@ class MainActivity : AppCompatActivity() {
         handler.post(tick)
     }
 
+    // ── BOOT ─────────────────────────────────────────────────────────────────
+
+    private fun boot() {
+        val lines = listOf(
+            "──────────────────────────────" to "system",
+            "  PERSONAL LAUNCHER  v3.0"     to "system",
+            "──────────────────────────────" to "system",
+        )
+        lines.forEachIndexed { i, (txt, cls) ->
+            handler.postDelayed({ printLine(txt, cls) }, i * 60L)
+        }
+        handler.postDelayed({ printBlank() }, lines.size * 60L)
+    }
+
+    // ── APP LOADING ───────────────────────────────────────────────────────────
+
     private fun loadApps() {
         Thread {
             val pm = packageManager
-            val flags = if (android.os.Build.VERSION.SDK_INT >= 33)
-                PackageManager.GET_META_DATA.toLong()
-            else 0L
-
             val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            val myPkg = packageName
-
             val apps = installed
                 .filter { ai ->
-                    ai.packageName != myPkg &&
+                    ai.packageName != packageName &&
                     pm.getLaunchIntentForPackage(ai.packageName) != null
                 }
-                .map { ai ->
-                    AppInfo(
-                        label = pm.getApplicationLabel(ai).toString(),
-                        packageName = ai.packageName,
-                        icon = pm.getApplicationIcon(ai)
-                    )
-                }
+                .map { ai -> AppInfo(pm.getApplicationLabel(ai).toString(), ai.packageName) }
                 .sortedBy { it.label.lowercase() }
 
             allApps = apps
-            filteredApps = apps
-
             runOnUiThread {
-                adapter.submitList(filteredApps)
-                tvOutput.text = "${filteredApps.size} apps"
-                applyColorsToViews()
+                tvStatus.text = "${apps.size} apps installed"
             }
         }.start()
     }
 
-    private fun applyColorsToViews() {
-        tvClock.setTextColor(textColor)
-        tvOutput.setTextColor(adjustAlpha(textColor, 0.5f))
-        etInput.setTextColor(textColor)
-        etInput.setHintTextColor(adjustAlpha(textColor, 0.3f))
-        val bg = etInput.background
-        if (bg != null) bg.setColorFilter(adjustAlpha(textColor, 0.3f), android.graphics.PorterDuff.Mode.SRC_IN)
-        val root = window.decorView.findViewById<View>(android.R.id.content)
-        root?.setBackgroundColor(bgColor)
-        adapter.setTextColor(textColor)
-    }
+    // ── INPUT ─────────────────────────────────────────────────────────────────
 
     private fun setupInput() {
-        etInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                val query = s.toString().trim()
-                filterApps(query)
+        etInput.setOnEditorActionListener { _, _, _ ->
+            val raw = etInput.text.toString()
+            etInput.setText("")
+            histIdx = -1
+            if (raw.isNotBlank()) {
+                history.add(0, raw)
+                handleCommand(raw.trim())
             }
-        })
-
-        etInput.setOnEditorActionListener { v, actionId, event ->
-            val txt = etInput.text.toString().trim()
-            handleCommand(txt)
             true
         }
+
+        // Arrow up/down history
+        etInput.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (histIdx < history.size - 1) { histIdx++; etInput.setText(history[histIdx]) }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (histIdx > 0) { histIdx--; etInput.setText(history[histIdx]) }
+                        else { histIdx = -1; etInput.setText("") }
+                        true
+                    }
+                    else -> false
+                }
+            } else false
+        }
     }
 
-    private fun filterApps(query: String) {
-        filteredApps = if (query.isEmpty()) {
-            allApps
-        } else {
-            allApps.filter {
-                it.label.contains(query, ignoreCase = true) ||
-                it.packageName.contains(query, ignoreCase = true)
-            }
-        }
-        adapter.submitList(filteredApps)
-        tvOutput.text = "${filteredApps.size} apps"
-    }
+    // ── COMMAND HANDLER ───────────────────────────────────────────────────────
 
     private fun handleCommand(raw: String) {
-        val lower = raw.lowercase().trim()
+        printPrompt(raw)
+        val lower = raw.lowercase()
+
         when {
-            lower == "open launcher.setting" -> showSettings()
-            lower == "help" -> showHelp()
-            lower == "list" -> showList()
-            lower == "clear" || lower == "cls" -> etInput.setText("")
+            lower == "help" -> cmdHelp()
+            lower == "list" -> cmdList()
+            lower == "clear" || lower == "cls" -> { termOutput.removeAllViews(); return }
+            lower == "open launcher.setting" -> cmdSettings()
             lower.startsWith("run ") -> {
                 val name = raw.substring(4).trim()
-                val app = allApps.find { it.label.equals(name, ignoreCase = true) }
-                if (app != null) launchApp(app) else showToast("App not found: $name")
-                etInput.setText("")
+                if (name.isEmpty()) printLine("usage: run <app name>", "warn")
+                else cmdRun(name)
             }
             lower.startsWith("delete ") -> {
                 val name = raw.substring(7).trim()
-                val app = allApps.find { it.label.equals(name, ignoreCase = true) }
-                if (app != null) uninstallApp(app) else showToast("App not found: $name")
-                etInput.setText("")
+                if (name.isEmpty()) printLine("usage: delete <app name>", "warn")
+                else cmdDelete(name)
             }
+            else -> printLine("unknown: $raw", "error")
+        }
+        printBlank()
+        scrollBottom()
+    }
+
+    private fun cmdHelp() {
+        printLine("commands:", "info")
+        printLine("  run <app>              launch app", "output")
+        printLine("  delete <app>           uninstall app", "output")
+        printLine("  list                   show all installed apps", "output")
+        printLine("  open launcher.setting  open settings", "output")
+        printLine("  clear                  clear terminal", "output")
+        printLine("  help                   show this", "output")
+    }
+
+    private fun cmdList() {
+        if (allApps.isEmpty()) { printLine("no apps found.", "output"); return }
+        printLine("${allApps.size} apps installed:", "info")
+        allApps.forEachIndexed { i, app ->
+            val num = (i + 1).toString().padStart(3)
+            printLine("$num  ${app.label}", "app")
         }
     }
 
-    private fun launchApp(app: AppInfo) {
+    private fun cmdRun(name: String) {
+        val app = findApp(name)
+        if (app == null) { printLine("not found: $name", "error"); return }
         val intent = packageManager.getLaunchIntentForPackage(app.packageName)
         if (intent != null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+            printLine("launching ${app.label}...", "output")
+            handler.postDelayed({
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                printLine("${app.label} opened.", "success")
+                scrollBottom()
+            }, 300)
         } else {
-            showToast("Cannot launch ${app.label}")
+            printLine("cannot launch ${app.label}", "error")
         }
     }
 
-    private fun uninstallApp(app: AppInfo) {
+    private fun cmdDelete(name: String) {
+        val app = findApp(name)
+        if (app == null) { printLine("not found: $name", "error"); return }
+        printLine("uninstalling ${app.label}...", "warn")
         val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.packageName}"))
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
     }
 
-    private fun showAppMenu(app: AppInfo, anchor: View) {
-        val overlay = FrameLayout(this)
-        overlay.setBackgroundColor(Color.parseColor("#99000000"))
-        overlay.id = android.R.id.custom
-
-        val card = LinearLayout(this)
-        card.orientation = LinearLayout.VERTICAL
-        val cardBg = android.graphics.drawable.GradientDrawable()
-        cardBg.setColor(adjustDark(bgColor, 20))
-        cardBg.cornerRadius = 12f * resources.displayMetrics.density
-        cardBg.setStroke((1 * resources.displayMetrics.density).toInt(), adjustAlpha(textColor, 0.3f))
-        card.background = cardBg
-        val dp8 = (8 * resources.displayMetrics.density).toInt()
-        card.setPadding(dp8, dp8, dp8, dp8)
-
-        val title = TextView(this)
-        title.text = app.label
-        title.setTextColor(textColor)
-        title.textSize = 13f
-        title.setPadding(dp8, dp8, dp8, dp8)
-        card.addView(title)
-
-        val divider = View(this)
-        divider.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
-        divider.setBackgroundColor(adjustAlpha(textColor, 0.2f))
-        card.addView(divider)
-
-        fun menuRow(label: String, color: Int = textColor, action: () -> Unit): TextView {
-            val tv = TextView(this)
-            tv.text = label
-            tv.setTextColor(color)
-            tv.textSize = 14f
-            tv.setPadding(dp8, dp8 + 4, dp8, dp8 + 4)
-            tv.setOnClickListener {
-                (overlay.parent as? ViewGroup)?.removeView(overlay)
-                action()
-            }
-            return tv
-        }
-
-        card.addView(menuRow("▸  open") { launchApp(app) })
-        card.addView(menuRow("✕  uninstall", Color.parseColor("#ff4455")) { uninstallApp(app) })
-        card.addView(menuRow("✕  close", adjustAlpha(textColor, 0.5f)) {
-            /* just close */
-        })
-
-        val cardLp = FrameLayout.LayoutParams(
-            (220 * resources.displayMetrics.density).toInt(),
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        cardLp.gravity = Gravity.CENTER
-        overlay.addView(card, cardLp)
-
-        overlay.setOnClickListener { (overlay.parent as? ViewGroup)?.removeView(overlay) }
-
-        val root = window.decorView as ViewGroup
-        root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // Animate in
-        card.alpha = 0f
-        card.scaleX = 0.85f
-        card.scaleY = 0.85f
-        card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(DecelerateInterpolator()).start()
+    private fun cmdSettings() {
+        printLine("opening settings...", "output")
+        scrollBottom()
+        handler.postDelayed({ showSettingsOverlay() }, 200)
     }
 
-    private fun showSettings() {
+    private fun findApp(name: String): AppInfo? {
+        val lower = name.lowercase()
+        return allApps.find { it.label.equals(name, ignoreCase = true) }
+            ?: allApps.find { it.label.lowercase().startsWith(lower) }
+            ?: allApps.find { it.label.lowercase().contains(lower) }
+            ?: allApps.find { it.packageName.lowercase().contains(lower) }
+    }
+
+    // ── TERMINAL PRINT ────────────────────────────────────────────────────────
+
+    private fun printLine(text: String, type: String = "output") {
+        val tv = makeTermTV()
+        tv.text = text
+        tv.setTextColor(colorForType(type))
+        if (type == "system") tv.alpha = 0.5f
+        termOutput.addView(tv)
+    }
+
+    private fun printPrompt(cmd: String) {
+        val tv = makeTermTV()
+        val full = "❯ $cmd"
+        val ss = SpannableString(full)
+        ss.setSpan(ForegroundColorSpan(dim(txtColor, 0.35f)), 0, 2, 0)
+        ss.setSpan(ForegroundColorSpan(txtColor), 2, full.length, 0)
+        tv.text = ss
+        termOutput.addView(tv)
+    }
+
+    private fun printBlank() {
+        val v = View(this)
+        v.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (8 * resources.displayMetrics.density).toInt())
+        termOutput.addView(v)
+    }
+
+    private fun makeTermTV(): TextView {
+        val tv = TextView(this)
+        tv.typeface = Typeface.MONOSPACE
+        tv.textSize = 13f
+        tv.setLineSpacing(2f, 1f)
+        tv.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        return tv
+    }
+
+    private fun colorForType(type: String): Int = when (type) {
+        "success" -> txtColor
+        "error"   -> Color.parseColor("#ff4455")
+        "warn"    -> Color.parseColor("#ffaa00")
+        "info"    -> Color.parseColor("#44aaff")
+        "app"     -> txtColor
+        "system"  -> dim(txtColor, 0.4f)
+        else      -> dim(txtColor, 0.55f)
+    }
+
+    private fun scrollBottom() {
+        scrollView.post { scrollView.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    // ── SETTINGS OVERLAY ──────────────────────────────────────────────────────
+
+    private fun showSettingsOverlay() {
+        val dp = resources.displayMetrics.density
+        val dp8 = (8 * dp).toInt()
+        val dp12 = (12 * dp).toInt()
+        val dp16 = (16 * dp).toInt()
+
         val overlay = FrameLayout(this)
         overlay.setBackgroundColor(Color.parseColor("#CC000000"))
 
         val card = LinearLayout(this)
         card.orientation = LinearLayout.VERTICAL
-        val dp = resources.displayMetrics.density
-        val dp16 = (16 * dp).toInt()
-        val dp8 = (8 * dp).toInt()
-        val dp4 = (4 * dp).toInt()
-
-        val cardBg = android.graphics.drawable.GradientDrawable()
-        cardBg.setColor(adjustDark(bgColor, 15))
-        cardBg.cornerRadius = 12f * dp
-        cardBg.setStroke((1 * dp).toInt(), adjustAlpha(textColor, 0.3f))
+        val cardBg = android.graphics.drawable.GradientDrawable().apply {
+            setColor(darken(bgColor, 12))
+            cornerRadius = 10f * dp
+            setStroke((1 * dp).toInt(), dim(txtColor, 0.25f))
+        }
         card.background = cardBg
         card.setPadding(0, 0, 0, dp8)
 
-        // Header
-        val header = TextView(this)
-        header.text = "launcher.setting"
-        header.setTextColor(adjustAlpha(textColor, 0.6f))
-        header.textSize = 11f
-        header.setPadding(dp16, dp16, dp16, dp8)
+        // header
+        val header = TextView(this).apply {
+            text = "launcher.setting"
+            typeface = Typeface.MONOSPACE
+            textSize = 11f
+            setTextColor(dim(txtColor, 0.5f))
+            setPadding(dp16, dp12, dp16, dp8)
+        }
         card.addView(header)
+        card.addView(makeDivider(dp))
 
-        val divH = View(this)
-        divH.setBackgroundColor(adjustAlpha(textColor, 0.2f))
-        divH.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
-        card.addView(divH)
+        // rows
+        fun settingRow(label: String, value: String, onClick: () -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp16, dp12, dp16, dp12)
+                setOnClickListener { onClick() }
+                isClickable = true
+                isFocusable = true
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                typeface = Typeface.MONOSPACE
+                textSize = 10f
+                setTextColor(dim(txtColor, 0.35f))
+            })
+            row.addView(TextView(this).apply {
+                text = value
+                typeface = Typeface.MONOSPACE
+                textSize = 13f
+                setTextColor(txtColor)
+                setPadding(0, (3 * dp).toInt(), 0, 0)
+            })
+            card.addView(row)
+            card.addView(makeDivider(dp))
+        }
 
-        // BG color row
-        val bgRow = makeSetting(card, "terminal background color", colorToHex(bgColor), dp)
-        bgRow.setOnClickListener {
-            (overlay.parent as? ViewGroup)?.removeView(overlay)
-            showColorPicker("bg_color", bgColor) { color ->
-                bgColor = color
-                prefs.edit().putInt("bg_color", color).apply()
+        settingRow("change terminal background color", colorHex(bgColor)) {
+            dismissOverlay(overlay)
+            showColorPicker("bg", bgColor) { c ->
+                bgColor = c
+                prefs.edit().putInt("bg", c).apply()
                 applyTheme()
-                applyColorsToViews()
+                printLine("bg color → ${colorHex(c)}", "success")
+                printBlank(); scrollBottom()
             }
         }
 
-        val div1 = View(this)
-        div1.setBackgroundColor(adjustAlpha(textColor, 0.1f))
-        div1.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
-        card.addView(div1)
-
-        // Text color row
-        val textRow = makeSetting(card, "text color", colorToHex(textColor), dp)
-        textRow.setOnClickListener {
-            (overlay.parent as? ViewGroup)?.removeView(overlay)
-            showColorPicker("text_color", textColor) { color ->
-                textColor = color
-                prefs.edit().putInt("text_color", color).apply()
-                applyColorsToViews()
+        settingRow("change text color", colorHex(txtColor)) {
+            dismissOverlay(overlay)
+            showColorPicker("txt", txtColor) { c ->
+                txtColor = c
+                prefs.edit().putInt("txt", c).apply()
+                applyTheme()
+                printLine("text color → ${colorHex(c)}", "success")
+                printBlank(); scrollBottom()
             }
         }
 
-        val div2 = View(this)
-        div2.setBackgroundColor(adjustAlpha(textColor, 0.1f))
-        div2.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
-        card.addView(div2)
+        // close btn
+        val close = TextView(this).apply {
+            text = "close"
+            typeface = Typeface.MONOSPACE
+            textSize = 12f
+            setTextColor(dim(txtColor, 0.4f))
+            gravity = Gravity.CENTER
+            setPadding(dp16, dp12, dp16, dp8)
+            setOnClickListener { dismissOverlay(overlay) }
+        }
+        card.addView(close)
 
-        // Close button
-        val closeBtn = TextView(this)
-        closeBtn.text = "close"
-        closeBtn.setTextColor(adjustAlpha(textColor, 0.5f))
-        closeBtn.textSize = 13f
-        closeBtn.gravity = Gravity.CENTER
-        closeBtn.setPadding(dp16, dp16, dp16, dp8)
-        closeBtn.setOnClickListener { (overlay.parent as? ViewGroup)?.removeView(overlay) }
-        card.addView(closeBtn)
-
-        val cardLp = FrameLayout.LayoutParams(
-            (300 * dp).toInt(),
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        cardLp.gravity = Gravity.CENTER
-        overlay.addView(card, cardLp)
-        overlay.setOnClickListener { (overlay.parent as? ViewGroup)?.removeView(overlay) }
+        val lp = FrameLayout.LayoutParams((290 * dp).toInt(), FrameLayout.LayoutParams.WRAP_CONTENT)
+        lp.gravity = Gravity.CENTER
+        overlay.addView(card, lp)
+        overlay.setOnClickListener { dismissOverlay(overlay) }
 
         val root = window.decorView as ViewGroup
-        root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
-        card.alpha = 0f
-        card.translationY = 30f * dp
-        card.animate().alpha(1f).translationY(0f).setDuration(200).setInterpolator(DecelerateInterpolator()).start()
+        // animate in
+        card.alpha = 0f; card.translationY = 24f * dp
+        card.animate().alpha(1f).translationY(0f).setDuration(200)
+            .setInterpolator(DecelerateInterpolator()).start()
     }
 
-    private fun makeSetting(parent: LinearLayout, label: String, value: String, dp: Float): LinearLayout {
-        val dp8 = (8 * dp).toInt()
-        val dp16 = (16 * dp).toInt()
+    // ── COLOR PICKER OVERLAY ──────────────────────────────────────────────────
 
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.VERTICAL
-        row.setPadding(dp16, dp8 + 4, dp16, dp8 + 4)
-
-        val lbl = TextView(this)
-        lbl.text = label
-        lbl.setTextColor(adjustAlpha(textColor, 0.4f))
-        lbl.textSize = 11f
-        row.addView(lbl)
-
-        val val_ = TextView(this)
-        val_.text = value
-        val_.setTextColor(textColor)
-        val_.textSize = 14f
-        row.addView(val_)
-
-        parent.addView(row)
-        return row
-    }
-
-    private fun showColorPicker(prefKey: String, currentColor: Int, onPick: (Int) -> Unit) {
+    private fun showColorPicker(key: String, current: Int, onApply: (Int) -> Unit) {
         val dp = resources.displayMetrics.density
-        val dp8 = (8 * dp).toInt()
+        val dp8  = (8  * dp).toInt()
+        val dp12 = (12 * dp).toInt()
         val dp16 = (16 * dp).toInt()
-        val dp4 = (4 * dp).toInt()
+        val dp4  = (4  * dp).toInt()
+
+        val hsv = FloatArray(3)
+        Color.colorToHSV(current, hsv)
+        var picked = current
 
         val overlay = FrameLayout(this)
         overlay.setBackgroundColor(Color.parseColor("#CC000000"))
 
         val card = LinearLayout(this)
         card.orientation = LinearLayout.VERTICAL
-        val cardBg = android.graphics.drawable.GradientDrawable()
-        cardBg.setColor(adjustDark(bgColor, 15))
-        cardBg.cornerRadius = 12f * dp
-        cardBg.setStroke((1 * dp).toInt(), adjustAlpha(textColor, 0.3f))
-        card.background = cardBg
-        card.setPadding(dp16, dp8, dp16, dp8)
+        card.background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(darken(bgColor, 12))
+            cornerRadius = 10f * dp
+            setStroke((1 * dp).toInt(), dim(txtColor, 0.25f))
+        }
+        card.setPadding(dp16, dp12, dp16, dp12)
 
-        val title = TextView(this)
-        title.text = if (prefKey == "bg_color") "background color" else "text color"
-        title.setTextColor(adjustAlpha(textColor, 0.6f))
-        title.textSize = 11f
-        title.setPadding(0, dp8, 0, dp8)
-        card.addView(title)
+        // title
+        card.addView(TextView(this).apply {
+            text = if (key == "bg") "background color" else "text color"
+            typeface = Typeface.MONOSPACE
+            textSize = 11f
+            setTextColor(dim(txtColor, 0.5f))
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.bottomMargin = dp8
+            layoutParams = lp
+        })
 
-        // Preview swatch
-        val preview = View(this)
-        val previewLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (48 * dp).toInt())
-        previewLp.bottomMargin = dp8
-        val previewBg = android.graphics.drawable.GradientDrawable()
-        previewBg.cornerRadius = 6f * dp
-        previewBg.setColor(currentColor)
-        preview.background = previewBg
-        card.addView(preview, previewLp)
+        // preview swatch
+        val previewBg = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = 6f * dp
+            setColor(picked)
+        }
+        val preview = View(this).apply {
+            background = previewBg
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (44 * dp).toInt())
+            lp.bottomMargin = dp8
+            layoutParams = lp
+        }
+        card.addView(preview)
+
+        // hex input
+        val hexEt = EditText(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 13f
+            setTextColor(txtColor)
+            setHintTextColor(dim(txtColor, 0.3f))
+            hint = "#rrggbb"
+            setText(colorHex(picked))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(darken(bgColor, 18))
+                cornerRadius = 4f * dp
+                setStroke((1 * dp).toInt(), dim(txtColor, 0.2f))
+            }
+            setPadding(dp8, dp8, dp8, dp8)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.bottomMargin = dp8
+            layoutParams = lp
+        }
+        card.addView(hexEt)
 
         // HSV sliders
-        val hsv = FloatArray(3)
-        Color.colorToHSV(currentColor, hsv)
-        var pickedColor = currentColor
-
-        fun makeSlider(labelStr: String, init: Float, max: Float = 360f): Pair<TextView, SeekBar> {
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            row.gravity = Gravity.CENTER_VERTICAL
-            val dp60 = (60 * dp).toInt()
-
-            val lbl = TextView(this)
-            lbl.text = labelStr
-            lbl.setTextColor(adjustAlpha(textColor, 0.5f))
-            lbl.textSize = 11f
-            lbl.layoutParams = LinearLayout.LayoutParams(dp60, LinearLayout.LayoutParams.WRAP_CONTENT)
-            row.addView(lbl)
-
-            val sb = SeekBar(this)
-            sb.max = max.toInt()
-            sb.progress = (init * (max / 1f)).toInt()
-            sb.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            sb.progressDrawable?.setColorFilter(textColor, android.graphics.PorterDuff.Mode.SRC_IN)
-            sb.thumb?.setColorFilter(textColor, android.graphics.PorterDuff.Mode.SRC_IN)
+        fun addSlider(label: String, initProgress: Int, max: Int, onChange: (Int) -> Unit): SeekBar {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                lp.bottomMargin = dp4
+                layoutParams = lp
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                typeface = Typeface.MONOSPACE
+                textSize = 10f
+                setTextColor(dim(txtColor, 0.4f))
+                layoutParams = LinearLayout.LayoutParams((36 * dp).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT)
+            })
+            val sb = SeekBar(this).apply {
+                this.max = max
+                progress = initProgress
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                progressDrawable?.setColorFilter(txtColor, android.graphics.PorterDuff.Mode.SRC_IN)
+                thumb?.setColorFilter(txtColor, android.graphics.PorterDuff.Mode.SRC_IN)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) onChange(p) }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {}
+                })
+            }
             row.addView(sb)
-
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.bottomMargin = dp4
-            card.addView(row, lp)
-            return Pair(lbl, sb)
+            card.addView(row)
+            return sb
         }
 
-        val (hLbl, hSb) = makeSlider("H", hsv[0] / 360f, 360f)
-        val (sLbl, sSb) = makeSlider("S", hsv[1], 100f)
-        val (vLbl, vSb) = makeSlider("V", hsv[2], 100f)
+        var updating = false
 
-        // Preset colors
-        val presets = listOf(
-            "#00ff88", "#00ffcc", "#00ccff", "#4488ff",
-            "#ff4455", "#ffaa00", "#ffffff", "#0a0a0a",
-            "#1a1a2e", "#111111", "#ff6ec7", "#7c3aed"
-        )
-
-        val presetGrid = LinearLayout(this)
-        presetGrid.orientation = LinearLayout.HORIZONTAL
-        presetGrid.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-
-        val presetScroll = HorizontalScrollView(this)
-        presetScroll.isHorizontalScrollBarEnabled = false
-        presetScroll.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-
-        val presetRow = LinearLayout(this)
-        presetRow.orientation = LinearLayout.HORIZONTAL
-        val swatchSize = (36 * dp).toInt()
-        val swatchMargin = (4 * dp).toInt()
-
-        for (hex in presets) {
-            val swatch = View(this)
-            val swatchBg = android.graphics.drawable.GradientDrawable()
-            swatchBg.setColor(Color.parseColor(hex))
-            swatchBg.cornerRadius = 4f * dp
-            swatch.background = swatchBg
-            val swatchLp = LinearLayout.LayoutParams(swatchSize, swatchSize)
-            swatchLp.marginEnd = swatchMargin
-            swatch.layoutParams = swatchLp
-            swatch.setOnClickListener {
-                val c = Color.parseColor(hex)
-                Color.colorToHSV(c, hsv)
-                hSb.progress = hsv[0].toInt()
-                sSb.progress = (hsv[1] * 100).toInt()
-                vSb.progress = (hsv[2] * 100).toInt()
-                pickedColor = c
-                previewBg.setColor(pickedColor)
-            }
-            presetRow.addView(swatch)
+        val hSb = addSlider("H", hsv[0].toInt(), 360) { p ->
+            if (updating) return@addSlider
+            hsv[0] = p.toFloat()
+            picked = Color.HSVToColor(hsv)
+            previewBg.setColor(picked)
+            updating = true; hexEt.setText(colorHex(picked)); updating = false
+        }
+        val sSb = addSlider("S", (hsv[1] * 100).toInt(), 100) { p ->
+            if (updating) return@addSlider
+            hsv[1] = p / 100f
+            picked = Color.HSVToColor(hsv)
+            previewBg.setColor(picked)
+            updating = true; hexEt.setText(colorHex(picked)); updating = false
+        }
+        val vSb = addSlider("V", (hsv[2] * 100).toInt(), 100) { p ->
+            if (updating) return@addSlider
+            hsv[2] = p / 100f
+            picked = Color.HSVToColor(hsv)
+            previewBg.setColor(picked)
+            updating = true; hexEt.setText(colorHex(picked)); updating = false
         }
 
-        presetScroll.addView(presetRow)
-        card.addView(presetScroll)
-
-        val lp8 = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp8.topMargin = dp8
-
-        // Hex input
-        val hexInput = EditText(this)
-        hexInput.setTextColor(textColor)
-        hexInput.setHintTextColor(adjustAlpha(textColor, 0.3f))
-        hexInput.hint = "#000000"
-        hexInput.textSize = 13f
-        hexInput.setText(colorToHex(currentColor))
-        card.addView(hexInput, lp8)
-
-        // Slider listener
-        val sliderChange = object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                hsv[0] = hSb.progress.toFloat()
-                hsv[1] = sSb.progress / 100f
-                hsv[2] = vSb.progress / 100f
-                pickedColor = Color.HSVToColor(hsv)
-                previewBg.setColor(pickedColor)
-                hexInput.setText(colorToHex(pickedColor))
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        }
-        hSb.setOnSeekBarChangeListener(sliderChange)
-        sSb.setOnSeekBarChangeListener(sliderChange)
-        vSb.setOnSeekBarChangeListener(sliderChange)
-
-        hexInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        hexEt.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: Editable?) {
+                if (updating) return
                 try {
                     val hex = s.toString().trim()
                     if (hex.matches(Regex("#[0-9a-fA-F]{6}"))) {
                         val c = Color.parseColor(hex)
                         Color.colorToHSV(c, hsv)
+                        updating = true
                         hSb.progress = hsv[0].toInt()
                         sSb.progress = (hsv[1] * 100).toInt()
                         vSb.progress = (hsv[2] * 100).toInt()
-                        pickedColor = c
-                        previewBg.setColor(pickedColor)
+                        updating = false
+                        picked = c
+                        previewBg.setColor(picked)
                     }
-                } catch (e: Exception) {}
+                } catch (_: Exception) {}
             }
         })
 
-        // Buttons row
-        val btnRow = LinearLayout(this)
-        btnRow.orientation = LinearLayout.HORIZONTAL
-        btnRow.gravity = Gravity.END
-        val lp16 = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp16.topMargin = dp16
-
-        val cancelBtn = makeTextBtn("cancel", adjustAlpha(textColor, 0.5f)) {
-            (overlay.parent as? ViewGroup)?.removeView(overlay)
-        }
-        val applyBtn = makeTextBtn("apply", textColor) {
-            (overlay.parent as? ViewGroup)?.removeView(overlay)
-            onPick(pickedColor)
-        }
-        btnRow.addView(cancelBtn)
-        btnRow.addView(applyBtn)
-        card.addView(btnRow, lp16)
-
-        val cardLp = FrameLayout.LayoutParams(
-            (320 * dp).toInt(),
-            FrameLayout.LayoutParams.WRAP_CONTENT
+        // preset swatches
+        val presets = listOf(
+            "#00ff88","#00ffcc","#00ccff","#4488ff",
+            "#ff4455","#ffaa00","#ffffff","#aaaaaa",
+            "#ff6ec7","#7c3aed","#0a0a0a","#111111"
         )
-        cardLp.gravity = Gravity.CENTER
-        overlay.addView(card, cardLp)
-        overlay.setOnClickListener { } // block passthrough
+        val swatchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp4; lp.bottomMargin = dp4
+            layoutParams = lp
+        }
+        presets.forEach { hex ->
+            val sw = View(this).apply {
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(Color.parseColor(hex))
+                    cornerRadius = 3f * dp
+                }
+                val sz = (28 * dp).toInt()
+                val lp = LinearLayout.LayoutParams(sz, sz)
+                lp.marginEnd = (4 * dp).toInt()
+                layoutParams = lp
+                setOnClickListener {
+                    val c = Color.parseColor(hex)
+                    Color.colorToHSV(c, hsv)
+                    updating = true
+                    hSb.progress = hsv[0].toInt()
+                    sSb.progress = (hsv[1] * 100).toInt()
+                    vSb.progress = (hsv[2] * 100).toInt()
+                    updating = false
+                    picked = c
+                    previewBg.setColor(picked)
+                    hexEt.setText(hex)
+                }
+            }
+            swatchRow.addView(sw)
+        }
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(swatchRow)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.bottomMargin = dp8
+            layoutParams = lp
+        }
+        card.addView(scroll)
 
-        val root = window.decorView as ViewGroup
-        root.addView(overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        // buttons
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp8
+            layoutParams = lp
+        }
+        fun btn(label: String, color: Int, action: () -> Unit): TextView = TextView(this).apply {
+            text = label
+            typeface = Typeface.MONOSPACE
+            textSize = 13f
+            setTextColor(color)
+            setPadding(dp16, dp8, dp8, dp8)
+            setOnClickListener { action() }
+        }
+        btnRow.addView(btn("cancel", dim(txtColor, 0.4f)) { dismissOverlay(overlay) })
+        btnRow.addView(btn("apply",  txtColor) {
+            dismissOverlay(overlay)
+            onApply(picked)
+        })
+        card.addView(btnRow)
 
-        card.alpha = 0f
-        card.scaleX = 0.9f
-        card.scaleY = 0.9f
-        card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(DecelerateInterpolator()).start()
+        val lp = FrameLayout.LayoutParams((310 * dp).toInt(), FrameLayout.LayoutParams.WRAP_CONTENT)
+        lp.gravity = Gravity.CENTER
+        overlay.addView(card, lp)
+        overlay.setOnClickListener { } // block tap-through
+
+        (window.decorView as ViewGroup).addView(overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+
+        card.alpha = 0f; card.scaleX = 0.9f; card.scaleY = 0.9f
+        card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180)
+            .setInterpolator(DecelerateInterpolator()).start()
     }
 
-    private fun makeTextBtn(text: String, color: Int, onClick: () -> Unit): TextView {
-        val dp = resources.displayMetrics.density
-        val tv = TextView(this)
-        tv.text = text
-        tv.setTextColor(color)
-        tv.textSize = 13f
-        tv.setPadding((16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
-        tv.setOnClickListener { onClick() }
-        return tv
+    // ── HELPERS ───────────────────────────────────────────────────────────────
+
+    private fun dismissOverlay(overlay: View) {
+        overlay.animate().alpha(0f).setDuration(120).withEndAction {
+            (overlay.parent as? ViewGroup)?.removeView(overlay)
+        }.start()
     }
 
-    private fun showHelp() {
-        showToast("run <app>  |  delete <app>  |  list  |  open launcher.setting  |  clear")
+    private fun makeDivider(dp: Float): View {
+        val v = View(this)
+        v.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt())
+        v.setBackgroundColor(dim(txtColor, 0.12f))
+        return v
     }
 
-    private fun showList() {
-        val names = allApps.joinToString("  ") { it.label }
-        showToast(names.take(200))
-    }
-
-    private fun showToast(msg: String) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-    }
-
-    // Color helpers
-    private fun adjustAlpha(color: Int, alpha: Float): Int {
-        val a = (alpha * 255).toInt().coerceIn(0, 255)
+    private fun dim(color: Int, factor: Float): Int {
+        val a = (Color.alpha(color) * factor).toInt().coerceIn(0, 255)
         return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
     }
 
-    private fun adjustDark(color: Int, amt: Int): Int {
-        return Color.rgb(
-            (Color.red(color) + amt).coerceIn(0, 255),
-            (Color.green(color) + amt).coerceIn(0, 255),
-            (Color.blue(color) + amt).coerceIn(0, 255)
-        )
-    }
+    private fun darken(color: Int, amt: Int): Int = Color.rgb(
+        (Color.red(color)   + amt).coerceIn(0, 255),
+        (Color.green(color) + amt).coerceIn(0, 255),
+        (Color.blue(color)  + amt).coerceIn(0, 255)
+    )
 
-    private fun colorToHex(color: Int): String {
-        return String.format("#%06X", 0xFFFFFF and color)
-    }
+    private fun colorHex(color: Int) = String.format("#%06X", 0xFFFFFF and color)
 
-    override fun onBackPressed() {
-        // swallow back — launcher
-    }
+    override fun onBackPressed() { /* swallow */ }
 }
