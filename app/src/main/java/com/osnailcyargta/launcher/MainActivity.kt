@@ -5,7 +5,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.*
-import android.graphics.drawable.BitmapDrawable
+
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -33,7 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etInput: EditText
     private lateinit var tvClock: TextView
     private lateinit var tvStatus: TextView
-    private lateinit var rootView: LinearLayout
+    private lateinit var rootView: View
     private lateinit var wallpaperView: ImageView
 
     private var allApps: List<AppInfo> = emptyList()
@@ -722,8 +722,8 @@ class MainActivity : AppCompatActivity() {
             orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin=dp8 }
         }
-        btnRow.addView(monoTV("cancel", dim(txtColor,0.4f), 13f).apply { setPadding(dp16,dp8,dp8,dp8); setOnClickListener { dismissOverlay(overlay) } })
-        btnRow.addView(monoTV("apply",  txtColor, 13f).apply { setPadding(dp16,dp8,dp8,dp8); setOnClickListener { dismissOverlay(overlay); onApply(picked) } })
+        btnRow.addView(monoTV("cancel", 13f, dim(txtColor,0.4f)).apply { setPadding(dp16,dp8,dp8,dp8); setOnClickListener { dismissOverlay(overlay) } })
+        btnRow.addView(monoTV("apply",  13f, txtColor).apply { setPadding(dp16,dp8,dp8,dp8); setOnClickListener { dismissOverlay(overlay); onApply(picked) } })
         card.addView(btnRow)
 
         val lp = FrameLayout.LayoutParams((310*dp).toInt(), FrameLayout.LayoutParams.WRAP_CONTENT); lp.gravity=Gravity.CENTER
@@ -740,8 +740,6 @@ class MainActivity : AppCompatActivity() {
         isFocusable=false; isFocusableInTouchMode=false
     }
 
-    // overload with color+size swapped for btn convenience
-    private fun monoTV(text: String, color: Int, size: Float) = monoTV(text, size, color)
 
     private fun dismissOverlay(overlay: View) {
         overlay.animate().alpha(0f).setDuration(120).withEndAction {
