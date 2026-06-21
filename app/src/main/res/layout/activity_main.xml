@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -9,11 +11,11 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="4dp"
-        android:gravity="center_vertical">
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:background="#0d0d0d">
 
         <TextView
             android:id="@+id/tvClock"
@@ -21,38 +23,54 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="00:00"
-            android:textSize="36sp"
-            android:textStyle="bold"
+            android:textSize="12sp"
             android:fontFamily="monospace"
             android:textColor="#00ff88"/>
 
         <TextView
-            android:id="@+id/tvOutput"
+            android:id="@+id/tvStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="0 apps"
+            android:text="loading..."
             android:textSize="11sp"
             android:fontFamily="monospace"
             android:textColor="#007740"/>
 
     </LinearLayout>
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rv"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:paddingBottom="8dp"
-        android:clipToPadding="false"/>
-
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="#1a1a1a"/>
 
+    <ScrollView
+        android:id="@+id/scrollView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:clipToPadding="false"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/termOutput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"/>
+
+    </ScrollView>
+
+    <View
+        android:id="@+id/divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1a1a1a"/>
+
     <LinearLayout
+        android:id="@+id/inputBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -64,10 +82,11 @@
         android:background="#0d0d0d">
 
         <TextView
+            android:id="@+id/tvPrompt"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="&#10095; "
-            android:textSize="14sp"
+            android:textSize="13sp"
             android:fontFamily="monospace"
             android:textColor="#004422"/>
 
@@ -78,8 +97,8 @@
             android:background="@null"
             android:hint="type a command..."
             android:textColor="#00ff88"
-            android:textColorHint="#003318"
-            android:textSize="14sp"
+            android:textColorHint="#002a11"
+            android:textSize="13sp"
             android:fontFamily="monospace"
             android:inputType="text"
             android:imeOptions="actionGo"
