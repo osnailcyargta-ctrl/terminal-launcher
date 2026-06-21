@@ -34,10 +34,9 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 if (url.startsWith("launcher://launch")) {
-                    Uri uri = request.getUrl();
-                    String pkg = uri.getQueryParameter("pkg");
-                    String name = uri.getQueryParameter("name");
-                    if (pkg != null) launchByPackage(pkg, name);
+                    String pkg = request.getUrl().getQueryParameter("pkg");
+                    String name = request.getUrl().getQueryParameter("name");
+                    launchByPackage(pkg, name);
                     return true;
                 }
                 return false;
@@ -48,21 +47,21 @@ public class MainActivity extends Activity {
     }
 
     private void launchByPackage(String pkg, String name) {
+        if (pkg == null || pkg.isEmpty()) return;
         PackageManager pm = getPackageManager();
         Intent intent = pm.getLaunchIntentForPackage(pkg);
         if (intent != null) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
         } else {
-            // Fallback: open Play Store for that package
+            // Not installed — open Play Store search
+            String query = (name != null && !name.isEmpty()) ? name : pkg;
             try {
-                Intent storeIntent = new Intent(Intent.ACTION_VIEW,
-                    Uri.parse("market://search?q=" + Uri.encode(name != null ? name : pkg)));
-                startActivity(storeIntent);
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("market://search?q=" + Uri.encode(query))));
             } catch (Exception e) {
-                Intent webIntent = new Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://play.google.com/store/search?q=" + Uri.encode(name != null ? name : pkg)));
-                startActivity(webIntent);
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://play.google.com/store/search?q=" + Uri.encode(query))));
             }
         }
     }
@@ -76,6 +75,6 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        // Swallow back press — it's a launcher
+        // Swallow — launcher
     }
 }
