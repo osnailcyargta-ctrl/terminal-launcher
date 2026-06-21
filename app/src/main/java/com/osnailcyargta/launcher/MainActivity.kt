@@ -16,6 +16,8 @@ import android.text.style.ForegroundColorSpan
 import android.view.*
 import android.view.animation.DecelerateInterpolator
 import android.widget.*
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
 import java.io.File
@@ -37,6 +39,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var wallpaperView: ImageView
 
     private var allApps: List<AppInfo> = emptyList()
+    private var appsLoaded = false
+    private val packageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            appsLoaded = false
+            loadApps()
+        }
+    }
     private val handler = Handler(Looper.getMainLooper())
 
     private var bgColor   = Color.parseColor("#0a0a0a")
@@ -87,12 +96,28 @@ class MainActivity : AppCompatActivity() {
         setupInput()
         boot()
         loadApps()
+
+        // Listen for app install/uninstall
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        registerReceiver(packageReceiver, filter)
     }
 
     override fun onResume() {
         super.onResume()
-        loadApps()
+        // hanya reload kalau belum pernah load atau ada perubahan package
+        if (!appsLoaded) loadApps()
         etInput.requestFocus()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(packageReceiver) } catch (_: Exception) {}
+        handler.removeCallbacksAndMessages(null)
     }
 
     // ── PERSIST ───────────────────────────────────────────────────────────────
@@ -222,6 +247,7 @@ class MainActivity : AppCompatActivity() {
             allApps = apps
             runOnUiThread {
                 tvStatus.text = "${apps.count { !hiddenApps.contains(it.packageName) }} apps installed"
+                appsLoaded = true
             }
         }.start()
     }
