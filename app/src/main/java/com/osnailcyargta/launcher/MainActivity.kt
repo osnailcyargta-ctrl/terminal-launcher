@@ -46,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             appsLoaded = false; loadApps()
+            when (intent?.action) {
+                Intent.ACTION_PACKAGE_ADDED   -> pluginManager.fireHook(HookEvent.ON_APP_INSTALL,   intent.data?.schemeSpecificPart ?: "")
+                Intent.ACTION_PACKAGE_REMOVED -> pluginManager.fireHook(HookEvent.ON_APP_UNINSTALL, intent.data?.schemeSpecificPart ?: "")
+            }
         }
     }
 
@@ -314,6 +318,7 @@ class MainActivity : AppCompatActivity() {
     // ── BOOT ──────────────────────────────────────────────────────────────────
 
     private fun boot() {
+        pluginManager.fireHook(HookEvent.ON_BOOT)
         listOf(
             "──────────────────────────────" to "system",
             "  PERSONAL LAUNCHER  v5.0"     to "system",
@@ -353,6 +358,14 @@ class MainActivity : AppCompatActivity() {
     // ── INPUT ─────────────────────────────────────────────────────────────────
 
     private fun setupInput() {
+        etInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (count > 0) pluginManager.fireHook(HookEvent.ON_KEYPRESS, s?.toString() ?: "")
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+
         etInput.setOnEditorActionListener { _, _, _ ->
             val raw = etInput.text.toString()
             etInput.setText(""); histIdx = -1
@@ -382,6 +395,8 @@ class MainActivity : AppCompatActivity() {
         val ts = "[${timeFmt.format(Date())}]"
         printPrompt(raw, ts)
         val lower = raw.lowercase().trim()
+
+        pluginManager.fireHook(HookEvent.ON_COMMAND, raw)
 
         // Alias shortcut
         val firstWord = lower.split(" ")[0]
@@ -482,7 +497,8 @@ class MainActivity : AppCompatActivity() {
         printLine("launching ${app.label}...","output")
         val rec = getRecents().toMutableList().also { it.removeAll { p -> p == app.packageName }; it.add(0, app.packageName) }
         prefs.edit().putString("recents", rec.take(10).joinToString(",")).apply()
-        handler.postDelayed({ intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent) }, 250)
+        handler.postDelayed({ intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent)
+            pluginManager.fireHook(HookEvent.ON_APP_LAUNCH, app.label) }, 250)
     }
 
     private fun cmdDelete(name: String) {
@@ -684,6 +700,8 @@ class MainActivity : AppCompatActivity() {
         val tv = makeTV(); tv.text = text; tv.setTextColor(colorForType(type))
         if (type == "system") tv.alpha = 0.45f
         termOutput.addView(tv)
+        if (type == "error") pluginManager.fireHook(HookEvent.ON_ERROR, text)
+        else pluginManager.fireHook(HookEvent.ON_PRINT, text)
     }
 
     private fun printPrompt(cmd: String, ts: String) {
@@ -726,6 +744,7 @@ class MainActivity : AppCompatActivity() {
     // ── SETTINGS OVERLAY ──────────────────────────────────────────────────────
 
     private fun showSettingsOverlay() {
+        pluginManager.fireHook(HookEvent.ON_OPEN_SETTING)
         val dp = resources.displayMetrics.density
         val dp8=(8*dp).toInt(); val dp12=(12*dp).toInt(); val dp16=(16*dp).toInt()
 
