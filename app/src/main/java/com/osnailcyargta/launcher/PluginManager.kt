@@ -72,6 +72,7 @@ class PluginManager(private val context: Context) {
     private var terminalCallback: ((String, String) -> Unit)? = null
     private var colorCallback: ((String, String) -> Unit)? = null
     private var mediaPlayer: MediaPlayer? = null
+    private var groqPlugin: GroqPlugin? = null
 
     fun setTerminalCallback(cb: (text: String, type: String) -> Unit) { terminalCallback = cb }
     fun setColorCallback(cb: (element: String, hex: String) -> Unit)  { colorCallback = cb }
@@ -79,6 +80,9 @@ class PluginManager(private val context: Context) {
     fun init() {
         pluginsDir.mkdirs()
         HookEvent.values().forEach { hooks[it] = mutableListOf() }
+        groqPlugin = GroqPlugin(context).also { gp ->
+            gp.onPrint = { text, type -> terminalCallback?.invoke(text, type) }
+        }
         loadAllPlugins()
     }
 
@@ -270,6 +274,17 @@ class PluginManager(private val context: Context) {
             }
         })
 
+        // Launcher.groqAsk(apiKey, prompt)
+        api.set("groqAsk", object : TwoArgFunction() {
+            override fun call(apiKey: LuaValue, prompt: LuaValue): LuaValue {
+                // Load sound file from plugin dir
+                val soundFile = File(pluginDir, "assets/type.ogg")
+                if (soundFile.exists()) groqPlugin?.loadSound(soundFile)
+                groqPlugin?.ask(apiKey.tojstring(), prompt.tojstring())
+                return LuaValue.NIL
+            }
+        })
+
         // Launcher.setColor("error", "#ff0000")
         api.set("setColor", object : TwoArgFunction() {
             override fun call(element: LuaValue, hex: LuaValue): LuaValue {
@@ -309,5 +324,5 @@ class PluginManager(private val context: Context) {
         return Pair(true, "plugin '${plugin.name}' deleted.")
     }
 
-    fun release() { mediaPlayer?.release(); mediaPlayer = null }
+    fun release() { mediaPlayer?.release(); mediaPlayer = null; groqPlugin?.release() }
 }
