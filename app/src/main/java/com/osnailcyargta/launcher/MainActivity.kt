@@ -878,7 +878,7 @@ class MainActivity : AppCompatActivity() {
         // Unlocked features
         if (featuresUnlocked) {
             card.addView(monoTV("── unlocked features ──", 10f, dim(txtColor, 0.3f)).also {
-                it.setPadding(dp16, dp8, dp16, dp4)
+                it.setPadding(dp16, dp8, dp16, (4*dp).toInt())
             })
             card.addView(makeDivider(dp))
 
