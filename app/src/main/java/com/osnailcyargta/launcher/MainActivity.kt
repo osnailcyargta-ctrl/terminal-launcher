@@ -110,10 +110,10 @@ class MainActivity : AppCompatActivity() {
 
         // Plugin manager
         pluginManager = PluginManager(this)
-        pluginManager.setTerminalCallback { text, type ->
+        pluginManager.terminalCallback = { text, type ->
             runOnUiThread { printLine(text, type); scrollBottom() }
         }
-        pluginManager.setColorCallback { element, hex ->
+        pluginManager.colorCallback = { element, hex ->
             runOnUiThread { applyColorElement(element, hex) }
         }
         pluginManager.showImageCallback = { file -> showImageOverlay(file) }
