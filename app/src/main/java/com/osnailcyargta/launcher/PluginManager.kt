@@ -229,13 +229,14 @@ class PluginManager(private val context: Context) {
         // ── GENERAL HTTP ──────────────────────────────────────────────────────
         // Launcher.http(url, method, headersTable, body) -> {code, body}
         // Called from background thread in Lua; blocks until response
-        api.set("http", object : LuaFunction() {
-            override fun call(a: LuaValue, b: LuaValue, c: LuaValue, d: LuaValue): LuaValue {
+        api.set("http", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
                 return try {
-                    val urlStr  = a.tojstring()
-                    val method  = b.tojstring().uppercase()
-                    val headers = c  // LuaTable or NIL
-                    val body    = if (d.isnil()) null else d.tojstring()
+                    val urlStr  = args.arg(1).tojstring()
+                    val method  = args.arg(2).tojstring().uppercase()
+                    val headers = args.arg(3)
+                    val bodyArg = args.arg(4)
+                    val body    = if (bodyArg.isnil()) null else bodyArg.tojstring()
 
                     val url  = URL(urlStr)
                     val conn = url.openConnection() as HttpURLConnection
@@ -243,7 +244,6 @@ class PluginManager(private val context: Context) {
                     conn.connectTimeout = 15000
                     conn.readTimeout    = 30000
 
-                    // Apply headers from Lua table
                     if (headers is LuaTable) {
                         var k = headers.next(LuaValue.NIL)
                         while (!k.arg1().isnil()) {
@@ -262,7 +262,6 @@ class PluginManager(private val context: Context) {
                     val respBody   = respStream?.bufferedReader()?.readText() ?: ""
                     conn.disconnect()
 
-                    // Return {code=N, body="..."}
                     val result = LuaTable()
                     result.set("code", LuaValue.valueOf(code))
                     result.set("body", LuaValue.valueOf(respBody))
@@ -274,10 +273,6 @@ class PluginManager(private val context: Context) {
                     result
                 }
             }
-            // 4-arg variant
-            override fun invoke(args: Varargs): Varargs = call(
-                args.arg(1), args.arg(2), args.arg(3), args.arg(4)
-            )
         })
 
         // ── SOUND ─────────────────────────────────────────────────────────────
