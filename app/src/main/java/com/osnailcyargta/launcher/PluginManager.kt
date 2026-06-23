@@ -4,12 +4,6 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.SoundPool
-import android.widget.ImageView
-import android.widget.VideoView
-import android.widget.FrameLayout
-import android.graphics.BitmapFactory
-import android.view.ViewGroup
-import android.net.Uri as AndroidUri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
