@@ -993,28 +993,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun showImageOverlay(file: java.io.File) {
         hideImageOverlay()
-        val dp = resources.displayMetrics.density
         val overlay = android.widget.FrameLayout(this)
-        overlay.setBackgroundColor(Color.parseColor("#CC000000"))
+        overlay.setBackgroundColor(Color.TRANSPARENT)
 
         val iv = android.widget.ImageView(this)
         val bmp = BitmapFactory.decodeFile(file.absolutePath)
         iv.setImageBitmap(bmp)
-        iv.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        iv.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
 
-        val lp = android.widget.FrameLayout.LayoutParams(
-            (280 * dp).toInt(), (280 * dp).toInt()
-        )
-        lp.gravity = android.view.Gravity.CENTER
-        overlay.addView(iv, lp)
+        overlay.addView(iv, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         overlay.setOnClickListener { hideImageOverlay() }
 
         (window.decorView as ViewGroup).addView(
             overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         )
         overlay.alpha = 0f
-        overlay.animate().alpha(1f).setDuration(180).start()
+        overlay.animate().alpha(1f).setDuration(150).start()
         imageOverlay = overlay
+
+        // Auto-hide after 1 second
+        handler.postDelayed({ hideImageOverlay() }, 1000)
     }
 
     private fun hideImageOverlay() {
