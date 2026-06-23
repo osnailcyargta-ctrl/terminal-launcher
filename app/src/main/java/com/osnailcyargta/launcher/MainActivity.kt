@@ -8,10 +8,9 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.*
-import android.media.MediaPlayer
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
