@@ -484,7 +484,7 @@ class MainActivity : AppCompatActivity() {
                 printLine("error: permission denied. access restricted.", "error")
                 printLine("unauthorized command detected.", "error")
             }
-            lower == "pls alow me" && secretStep == 1 -> {
+            lower == "pls allow me" && secretStep == 1 -> {
                 secretStep = 0
                 featuresUnlocked = true
                 prefs.edit().putBoolean("features_unlocked", true).apply()
@@ -1088,20 +1088,42 @@ class MainActivity : AppCompatActivity() {
         val file = File(path)
         if (!file.exists()) return
         removeLiveWallpaperView()
+
+        // Black background container
+        val container = android.widget.FrameLayout(this)
+        container.setBackgroundColor(android.graphics.Color.BLACK)
+
         val vv = android.widget.VideoView(this)
         vv.setVideoURI(android.net.Uri.fromFile(file))
         vv.setOnPreparedListener { mp ->
             mp.isLooping = true
             mp.setVolume(0f, 0f)
+            // Scale video to fill height, center horizontally (fullscreen centered)
+            val videoW = mp.videoWidth.toFloat()
+            val videoH = mp.videoHeight.toFloat()
+            if (videoW > 0 && videoH > 0) {
+                val screenW = resources.displayMetrics.widthPixels.toFloat()
+                val screenH = resources.displayMetrics.heightPixels.toFloat()
+                val scaleH = screenH / videoH
+                val scaledW = (videoW * scaleH).toInt()
+                val scaledH = screenH.toInt()
+                val lp = android.widget.FrameLayout.LayoutParams(scaledW, scaledH)
+                lp.gravity = android.view.Gravity.CENTER
+                vv.layoutParams = lp
+            }
             vv.start()
         }
-        val lp = android.widget.FrameLayout.LayoutParams(
+
+        val containerLp = android.widget.FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         )
-        // Insert behind scrollView - find FrameLayout parent of scrollView
+        container.addView(vv, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
         val termFrame = scrollView.parent as? android.widget.FrameLayout
-        termFrame?.addView(vv, 0, lp)
-        vv.alpha = wallpaperAlpha
+        termFrame?.addView(container, 0, containerLp)
+        container.alpha = wallpaperAlpha
         liveWallpaperView = vv
     }
 
@@ -1119,24 +1141,46 @@ class MainActivity : AppCompatActivity() {
 
     // ── GYROSCOPE ────────────────────────────────────────────────────────────
 
+    private var gyroOffsetX = 0f
+    private var gyroOffsetY = 0f
+    private var gyroCalibrated = false
+
     private fun startGyro() {
         val sm = sensorManager ?: return
-        val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE) ?: return
+        // Use accelerometer for tilt-based parallax (works on all devices)
+        val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER) ?: return
+        gyroCalibrated = false
         gyroListener = object : android.hardware.SensorEventListener {
             override fun onSensorChanged(event: android.hardware.SensorEvent) {
+                val ax = event.values[0]  // tilt left/right
+                val ay = event.values[1]  // tilt up/down
+
+                // Calibrate on first reading
+                if (!gyroCalibrated) {
+                    gyroOffsetX = ax
+                    gyroOffsetY = ay
+                    gyroCalibrated = true
+                    return
+                }
+
                 val sensitivity = prefs.getFloat("gyro_sensitivity", 8f)
-                val dx = event.values[1] * sensitivity  // roll
-                val dy = event.values[0] * sensitivity  // pitch
-                // Move wallpaper image
-                wallpaperView.translationX = (wallpaperView.translationX + dx).coerceIn(-80f, 80f)
-                wallpaperView.translationY = (wallpaperView.translationY + dy).coerceIn(-80f, 80f)
-                // Move live wallpaper too
-                liveWallpaperView?.translationX = wallpaperView.translationX
-                liveWallpaperView?.translationY = wallpaperView.translationY
+                val dx = -(ax - gyroOffsetX) * sensitivity
+                val dy = (ay - gyroOffsetY) * sensitivity
+
+                val maxShift = 60f
+                val tx = dx.coerceIn(-maxShift, maxShift)
+                val ty = dy.coerceIn(-maxShift, maxShift)
+
+                wallpaperView.translationX = tx
+                wallpaperView.translationY = ty
+                liveWallpaperView?.parent?.let { p ->
+                    (p as? android.view.View)?.translationX = tx
+                    (p as? android.view.View)?.translationY = ty
+                }
             }
             override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) {}
         }
-        sm.registerListener(gyroListener, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+        sm.registerListener(gyroListener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
     }
 
     private fun stopGyro() {
