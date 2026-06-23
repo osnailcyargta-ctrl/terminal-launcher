@@ -8,6 +8,9 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.media.MediaPlayer
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -37,6 +40,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var rootView: View
     private lateinit var wallpaperView: ImageView
+    private var imageOverlay: android.widget.FrameLayout? = null
+    private var videoOverlay: android.widget.FrameLayout? = null
     private lateinit var pluginManager: PluginManager
 
     private var allApps: List<AppInfo> = emptyList()
@@ -112,6 +117,10 @@ class MainActivity : AppCompatActivity() {
         pluginManager.setColorCallback { element, hex ->
             runOnUiThread { applyColorElement(element, hex) }
         }
+        pluginManager.showImageCallback = { file -> showImageOverlay(file) }
+        pluginManager.hideImageCallback  = { hideImageOverlay() }
+        pluginManager.showVideoCallback  = { file -> showVideoOverlay(file) }
+        pluginManager.hideVideoCallback  = { hideVideoOverlay() }
         pluginManager.init()
 
         applyTheme()
@@ -980,6 +989,79 @@ class MainActivity : AppCompatActivity() {
     private fun dim(color: Int, f: Float) = Color.argb((Color.alpha(color)*f).toInt().coerceIn(0,255),Color.red(color),Color.green(color),Color.blue(color))
     private fun darken(color: Int, amt: Int) = Color.rgb((Color.red(color)+amt).coerceIn(0,255),(Color.green(color)+amt).coerceIn(0,255),(Color.blue(color)+amt).coerceIn(0,255))
     private fun colorHex(color: Int) = String.format("#%06X", 0xFFFFFF and color)
+
+    // ── IMAGE OVERLAY ────────────────────────────────────────────────────────
+
+    private fun showImageOverlay(file: java.io.File) {
+        hideImageOverlay()
+        val dp = resources.displayMetrics.density
+        val overlay = android.widget.FrameLayout(this)
+        overlay.setBackgroundColor(Color.parseColor("#CC000000"))
+
+        val iv = android.widget.ImageView(this)
+        val bmp = BitmapFactory.decodeFile(file.absolutePath)
+        iv.setImageBitmap(bmp)
+        iv.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+
+        val lp = android.widget.FrameLayout.LayoutParams(
+            (280 * dp).toInt(), (280 * dp).toInt()
+        )
+        lp.gravity = android.view.Gravity.CENTER
+        overlay.addView(iv, lp)
+        overlay.setOnClickListener { hideImageOverlay() }
+
+        (window.decorView as ViewGroup).addView(
+            overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        overlay.alpha = 0f
+        overlay.animate().alpha(1f).setDuration(180).start()
+        imageOverlay = overlay
+    }
+
+    private fun hideImageOverlay() {
+        imageOverlay?.animate()?.alpha(0f)?.setDuration(150)?.withEndAction {
+            (imageOverlay?.parent as? ViewGroup)?.removeView(imageOverlay)
+            imageOverlay = null
+        }?.start()
+    }
+
+    // ── VIDEO OVERLAY ─────────────────────────────────────────────────────────
+
+    private fun showVideoOverlay(file: java.io.File) {
+        hideVideoOverlay()
+        val dp = resources.displayMetrics.density
+        val overlay = android.widget.FrameLayout(this)
+        overlay.setBackgroundColor(Color.parseColor("#CC000000"))
+
+        val vv = android.widget.VideoView(this)
+        vv.setVideoURI(Uri.fromFile(file))
+
+        val lp = android.widget.FrameLayout.LayoutParams(
+            (320 * dp).toInt(), (200 * dp).toInt()
+        )
+        lp.gravity = android.view.Gravity.CENTER
+        overlay.addView(vv, lp)
+        overlay.setOnClickListener { hideVideoOverlay() }
+
+        (window.decorView as ViewGroup).addView(
+            overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        vv.setOnPreparedListener { mp ->
+            mp.isLooping = false
+            vv.start()
+        }
+        vv.setOnCompletionListener { hideVideoOverlay() }
+        overlay.alpha = 0f
+        overlay.animate().alpha(1f).setDuration(180).start()
+        videoOverlay = overlay
+    }
+
+    private fun hideVideoOverlay() {
+        videoOverlay?.animate()?.alpha(0f)?.setDuration(150)?.withEndAction {
+            (videoOverlay?.parent as? ViewGroup)?.removeView(videoOverlay)
+            videoOverlay = null
+        }?.start()
+    }
 
     override fun onBackPressed() { /* swallow */ }
 }
