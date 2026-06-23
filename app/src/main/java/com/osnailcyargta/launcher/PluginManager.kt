@@ -1,7 +1,10 @@
 package com.osnailcyargta.launcher
 
 import android.content.Context
-import android.media.MediaPlayer
+import android.media.AudioAttributes
+import android.media.SoundPool
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import org.json.JSONObject
 import org.luaj.vm2.*
@@ -9,53 +12,28 @@ import org.luaj.vm2.lib.*
 import org.luaj.vm2.lib.jse.JsePlatform
 import java.io.File
 import java.io.FileInputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.zip.ZipInputStream
 
 const val LAUNCHER_API_VERSION = 1
 
-// All supported hook events
 enum class HookEvent {
-    ON_COMMAND,
-    ON_KEYPRESS,
-    ON_OPEN_SETTING,
-    ON_PRINT,
-    ON_ERROR,
-    ON_BOOT,
-    ON_APP_LAUNCH,
-    ON_APP_INSTALL,
-    ON_APP_UNINSTALL
+    ON_COMMAND, ON_KEYPRESS, ON_OPEN_SETTING, ON_PRINT,
+    ON_ERROR, ON_BOOT, ON_APP_LAUNCH, ON_APP_INSTALL, ON_APP_UNINSTALL
 }
 
 data class PluginInfo(
-    val name: String,
-    val version: String,
-    val apiVersion: Int,
-    val author: String,
-    val description: String,
-    val dir: File,
-    var enabled: Boolean = true,
-    var errorMsg: String = ""
+    val name: String, val version: String, val apiVersion: Int,
+    val author: String, val description: String, val dir: File,
+    var enabled: Boolean = true, var errorMsg: String = ""
 )
-
-data class PluginCommand(
-    val name: String,
-    val pluginName: String,
-    val handler: LuaFunction
-)
-
+data class PluginCommand(val name: String, val pluginName: String, val handler: LuaFunction)
 data class PluginSetting(
-    val label: String,
-    val pluginName: String,
-    val defaultValue: String,
-    var currentValue: String,
-    val handler: LuaFunction
+    val label: String, val pluginName: String,
+    val defaultValue: String, var currentValue: String, val handler: LuaFunction
 )
-
-data class PluginHook(
-    val event: HookEvent,
-    val pluginName: String,
-    val handler: LuaFunction
-)
+data class PluginHook(val event: HookEvent, val pluginName: String, val handler: LuaFunction)
 
 class PluginManager(private val context: Context) {
 
@@ -63,18 +41,21 @@ class PluginManager(private val context: Context) {
     val commands = mutableMapOf<String, PluginCommand>()
     val settings = mutableListOf<PluginSetting>()
 
-    // event -> list of hooks
-    private val hooks = mutableMapOf<HookEvent, MutableList<PluginHook>>()
+    private val hooks          = mutableMapOf<HookEvent, MutableList<PluginHook>>()
+    private val pluginsDir     = File(context.filesDir, "plugins")
+    private val mainHandler    = Handler(Looper.getMainLooper())
+    private val soundPools     = mutableMapOf<String, SoundPool>()
+    private val soundIds       = mutableMapOf<String, Int>()
+    private val soundLoaded    = mutableMapOf<String, Boolean>()
+    private val typewriterJobs = mutableMapOf<String, MutableList<Runnable>>()
 
-    val variables = mutableMapOf<String, String>()
-
-    private val pluginsDir = File(context.filesDir, "plugins")
-    private var terminalCallback: ((String, String) -> Unit)? = null
-    private var colorCallback: ((String, String) -> Unit)? = null
-    private var mediaPlayer: MediaPlayer? = null
-
-    fun setTerminalCallback(cb: (text: String, type: String) -> Unit) { terminalCallback = cb }
-    fun setColorCallback(cb: (element: String, hex: String) -> Unit)  { colorCallback = cb }
+    // Callbacks set by MainActivity
+    var terminalCallback:  ((String, String) -> Unit)? = null
+    var colorCallback:     ((String, String) -> Unit)? = null
+    var showImageCallback: ((File, Long) -> Unit)?     = null
+    var hideImageCallback: (() -> Unit)?               = null
+    var showVideoCallback: ((File, Boolean) -> Unit)?  = null
+    var hideVideoCallback: (() -> Unit)?               = null
 
     fun init() {
         pluginsDir.mkdirs()
@@ -82,16 +63,12 @@ class PluginManager(private val context: Context) {
         loadAllPlugins()
     }
 
-    // ── FIRE HOOK ─────────────────────────────────────────────────────────────
+    // ── HOOKS ─────────────────────────────────────────────────────────────────
 
     fun fireHook(event: HookEvent, arg: String = "") {
-        val list = hooks[event] ?: return
-        for (hook in list) {
-            try {
-                hook.handler.call(LuaValue.valueOf(arg))
-            } catch (e: Exception) {
-                Log.e("PluginManager", "hook error [${hook.pluginName}] ${event.name}: ${e.message}")
-            }
+        hooks[event]?.forEach { hook ->
+            try { hook.handler.call(LuaValue.valueOf(arg)) }
+            catch (e: Exception) { Log.e("Plugin", "hook [${hook.pluginName}] ${event.name}: ${e.message}") }
         }
     }
 
@@ -103,26 +80,20 @@ class PluginManager(private val context: Context) {
             ZipInputStream(FileInputStream(zipFile)).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
-                    if (entry.name == "manifest.json") {
-                        manifestJson = zis.readBytes().toString(Charsets.UTF_8); break
-                    }
+                    if (entry.name == "manifest.json") { manifestJson = zis.readBytes().toString(Charsets.UTF_8); break }
                     entry = zis.nextEntry
                 }
             }
             if (manifestJson == null) return Pair(false, "manifest.json not found")
-
             val manifest = JSONObject(manifestJson!!)
             val name   = manifest.optString("name", "").trim()
             val apiVer = manifest.optInt("api_version", -1)
-
-            if (name.isEmpty()) return Pair(false, "plugin name empty in manifest")
-            if (apiVer == -1)   return Pair(false, "api_version missing in manifest")
+            if (name.isEmpty()) return Pair(false, "plugin name empty")
+            if (apiVer == -1)   return Pair(false, "api_version missing")
             if (apiVer != LAUNCHER_API_VERSION)
                 return Pair(false, "API mismatch: plugin=$apiVer launcher=$LAUNCHER_API_VERSION")
-
             val pluginDir = File(pluginsDir, name)
             pluginDir.mkdirs()
-
             ZipInputStream(FileInputStream(zipFile)).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
@@ -134,48 +105,36 @@ class PluginManager(private val context: Context) {
             }
             loadAllPlugins()
             Pair(true, "plugin '$name' installed.")
-        } catch (e: Exception) {
-            Pair(false, "install error: ${e.message}")
-        }
+        } catch (e: Exception) { Pair(false, "install error: ${e.message}") }
     }
 
     // ── LOAD ──────────────────────────────────────────────────────────────────
 
     fun loadAllPlugins() {
-        plugins.clear()
-        commands.clear()
-        settings.clear()
+        plugins.clear(); commands.clear(); settings.clear()
         HookEvent.values().forEach { hooks[it]?.clear() }
-
-        val dirs = pluginsDir.listFiles { f -> f.isDirectory } ?: return
-        for (dir in dirs) loadPlugin(dir)
+        pluginsDir.listFiles { f -> f.isDirectory }?.forEach { loadPlugin(it) }
     }
 
     private fun loadPlugin(dir: File) {
-        val manifestFile = File(dir, "manifest.json")
-        if (!manifestFile.exists()) return
-
-        val manifest = try { JSONObject(manifestFile.readText()) } catch (e: Exception) {
+        val mf = File(dir, "manifest.json")
+        if (!mf.exists()) return
+        val manifest = try { JSONObject(mf.readText()) } catch (e: Exception) {
             plugins.add(PluginInfo("?","?", -1,"?","?", dir, false, "bad manifest: ${e.message}")); return
         }
-
         val name   = manifest.optString("name", dir.name)
         val ver    = manifest.optString("version", "?")
         val apiVer = manifest.optInt("api_version", -1)
         val author = manifest.optString("author", "unknown")
         val desc   = manifest.optString("description", "")
-
         if (apiVer != LAUNCHER_API_VERSION) {
             plugins.add(PluginInfo(name, ver, apiVer, author, desc, dir, false,
-                "API mismatch: plugin=$apiVer launcher=$LAUNCHER_API_VERSION"))
-            return
+                "API mismatch: plugin=$apiVer launcher=$LAUNCHER_API_VERSION")); return
         }
-
         val luaFile = File(dir, "main.lua")
         if (!luaFile.exists()) {
             plugins.add(PluginInfo(name, ver, apiVer, author, desc, dir, false, "main.lua not found")); return
         }
-
         try {
             val globals = JsePlatform.standardGlobals()
             injectAPI(globals, name, dir)
@@ -191,34 +150,32 @@ class PluginManager(private val context: Context) {
     private fun injectAPI(globals: Globals, pluginName: String, pluginDir: File) {
         val api = LuaTable()
 
-        // Launcher.registerCommand("name", function(args) end)
+        // registerCommand
         api.set("registerCommand", object : TwoArgFunction() {
-            override fun call(cmdName: LuaValue, handler: LuaValue): LuaValue {
-                val name = cmdName.tojstring().lowercase().trim()
-                if (handler is LuaFunction) commands[name] = PluginCommand(name, pluginName, handler)
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                if (b is LuaFunction) commands[a.tojstring().lowercase().trim()] = PluginCommand(a.tojstring(), pluginName, b)
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.registerSetting("label", "default", function(newVal) end)
+        // registerSetting
         api.set("registerSetting", object : ThreeArgFunction() {
-            override fun call(label: LuaValue, default_: LuaValue, handler: LuaValue): LuaValue {
-                if (handler is LuaFunction) {
-                    val lbl = label.tojstring()
-                    val def = default_.tojstring()
+            override fun call(a: LuaValue, b: LuaValue, c: LuaValue): LuaValue {
+                if (c is LuaFunction) {
+                    val lbl = a.tojstring(); val def = b.tojstring()
                     val prefs = context.getSharedPreferences("plugin_$pluginName", Context.MODE_PRIVATE)
                     val cur = prefs.getString("setting_$lbl", def) ?: def
-                    settings.add(PluginSetting(lbl, pluginName, def, cur, handler))
+                    settings.add(PluginSetting(lbl, pluginName, def, cur, c))
                 }
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.on("event_name", function(arg) end)
+        // on(event, fn)
         api.set("on", object : TwoArgFunction() {
-            override fun call(eventName: LuaValue, handler: LuaValue): LuaValue {
-                if (handler !is LuaFunction) return LuaValue.NIL
-                val event = when (eventName.tojstring().lowercase().trim()) {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                if (b !is LuaFunction) return LuaValue.NIL
+                val event = when (a.tojstring().lowercase()) {
                     "on_command"       -> HookEvent.ON_COMMAND
                     "on_keypress"      -> HookEvent.ON_KEYPRESS
                     "on_open_setting"  -> HookEvent.ON_OPEN_SETTING
@@ -228,63 +185,126 @@ class PluginManager(private val context: Context) {
                     "on_app_launch"    -> HookEvent.ON_APP_LAUNCH
                     "on_app_install"   -> HookEvent.ON_APP_INSTALL
                     "on_app_uninstall" -> HookEvent.ON_APP_UNINSTALL
-                    else -> { Log.w("Plugin", "unknown event: ${eventName.tojstring()}"); return LuaValue.NIL }
+                    else -> return LuaValue.NIL
                 }
-                hooks[event]?.add(PluginHook(event, pluginName, handler))
+                hooks[event]?.add(PluginHook(event, pluginName, b))
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.print("text", "type")
+        // print(text, type)
         api.set("print", object : TwoArgFunction() {
-            override fun call(text: LuaValue, type: LuaValue): LuaValue {
-                terminalCallback?.invoke(text.tojstring(), type.tojstring())
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                mainHandler.post { terminalCallback?.invoke(a.tojstring(), b.tojstring()) }
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.setVar / getVar
+        // setVar / getVar
         api.set("setVar", object : TwoArgFunction() {
-            override fun call(key: LuaValue, value: LuaValue): LuaValue {
-                variables["$pluginName.${key.tojstring()}"] = value.tojstring(); return LuaValue.NIL
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                context.getSharedPreferences("pluginvars_$pluginName", Context.MODE_PRIVATE)
+                    .edit().putString(a.tojstring(), b.tojstring()).apply()
+                return LuaValue.NIL
             }
         })
         api.set("getVar", object : OneArgFunction() {
-            override fun call(key: LuaValue): LuaValue =
-                LuaValue.valueOf(variables["$pluginName.${key.tojstring()}"] ?: "")
+            override fun call(a: LuaValue): LuaValue {
+                val v = context.getSharedPreferences("pluginvars_$pluginName", Context.MODE_PRIVATE)
+                    .getString(a.tojstring(), "") ?: ""
+                return LuaValue.valueOf(v)
+            }
         })
 
-        // Launcher.playSound("assets/ding.mp3")
-        api.set("playSound", object : OneArgFunction() {
-            override fun call(path: LuaValue): LuaValue {
-                try {
-                    val f = File(pluginDir, path.tojstring())
-                    if (f.exists()) {
-                        mediaPlayer?.release()
-                        mediaPlayer = MediaPlayer().apply {
-                            setDataSource(f.absolutePath); prepare(); start()
-                        }
-                    } else Log.w("Plugin", "sound file not found: ${f.absolutePath}")
-                } catch (e: Exception) { Log.e("Plugin", "playSound: ${e.message}") }
+        // setPref / getPref (alias, same as setVar/getVar but named clearly)
+        api.set("setPref", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                context.getSharedPreferences("pluginpref_$pluginName", Context.MODE_PRIVATE)
+                    .edit().putString(a.tojstring(), b.tojstring()).apply()
+                return LuaValue.NIL
+            }
+        })
+        api.set("getPref", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val def = if (b.isnil()) "" else b.tojstring()
+                val v = context.getSharedPreferences("pluginpref_$pluginName", Context.MODE_PRIVATE)
+                    .getString(a.tojstring(), def) ?: def
+                return LuaValue.valueOf(v)
+            }
+        })
+
+        // setColor(element, hex)
+        api.set("setColor", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                mainHandler.post { colorCallback?.invoke(a.tojstring(), b.tojstring()) }
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.setColor("error", "#ff0000")
-        api.set("setColor", object : TwoArgFunction() {
-            override fun call(element: LuaValue, hex: LuaValue): LuaValue {
-                colorCallback?.invoke(element.tojstring(), hex.tojstring()); return LuaValue.NIL
+        // showImage(file, autoHideMs?)
+        api.set("showImage", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val file = File(pluginDir, a.tojstring())
+                val ms = if (b.isnil()) 0L else b.tolong()
+                if (file.exists()) mainHandler.post { showImageCallback?.invoke(file, ms) }
+                else mainHandler.post { terminalCallback?.invoke("showImage: not found: ${a.tojstring()}", "error") }
+                return LuaValue.NIL
             }
         })
 
-        // Launcher.apiVersion()
-        api.set("apiVersion", object : ZeroArgFunction() {
-            override fun call(): LuaValue = LuaValue.valueOf(LAUNCHER_API_VERSION)
+        // hideImage()
+        api.set("hideImage", object : ZeroArgFunction() {
+            override fun call(): LuaValue {
+                mainHandler.post { hideImageCallback?.invoke() }
+                return LuaValue.NIL
+            }
         })
 
+        // showVideo(file, loop?)
+        api.set("showVideo", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val file = File(pluginDir, a.tojstring())
+                val loop = !b.isnil() && b.toboolean()
+                if (file.exists()) mainHandler.post { showVideoCallback?.invoke(file, loop) }
+                else mainHandler.post { terminalCallback?.invoke("showVideo: not found: ${a.tojstring()}", "error") }
+                return LuaValue.NIL
+            }
+        })
 
-        // ── TIMER / DELAY ─────────────────────────────────────────────────────
-        // Launcher.delay(ms, fn) — run fn after ms milliseconds on main thread
+        // hideVideo()
+        api.set("hideVideo", object : ZeroArgFunction() {
+            override fun call(): LuaValue {
+                mainHandler.post { hideVideoCallback?.invoke() }
+                return LuaValue.NIL
+            }
+        })
+
+        // toast(msg)
+        api.set("toast", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                val msg = a.tojstring()
+                mainHandler.post { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show() }
+                return LuaValue.NIL
+            }
+        })
+
+        // vibrate(ms)
+        api.set("vibrate", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                val ms = a.tolong()
+                try {
+                    val vib = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                    if (android.os.Build.VERSION.SDK_INT >= 26) {
+                        vib.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                    } else {
+                        @Suppress("DEPRECATION") vib.vibrate(ms)
+                    }
+                } catch (_: Exception) {}
+                return LuaValue.NIL
+            }
+        })
+
+        // delay(ms, fn)
         api.set("delay", object : TwoArgFunction() {
             override fun call(a: LuaValue, b: LuaValue): LuaValue {
                 val ms = a.tolong()
@@ -296,49 +316,55 @@ class PluginManager(private val context: Context) {
             }
         })
 
-        // ── IMAGE OVERLAY ─────────────────────────────────────────────────────
-        // Launcher.showImage("assets/img.png", autoHideMs?)
-        // autoHideMs = 0 means manual hide only
-        api.set("showImage", object : TwoArgFunction() {
+        // random(min, max)
+        api.set("random", object : TwoArgFunction() {
             override fun call(a: LuaValue, b: LuaValue): LuaValue {
-                val file = File(pluginDir, a.tojstring())
-                val autoHide = if (b.isnil()) 0L else b.tolong()
-                if (file.exists()) mainHandler.post { showImageCallback?.invoke(file, autoHide) }
-                else mainHandler.post { terminalCallback?.invoke("showImage: not found: ${a.tojstring()}", "error") }
+                return LuaValue.valueOf((a.toint()..b.toint()).random())
+            }
+        })
+
+        // loadSound(path) -> handle
+        api.set("loadSound", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                return try {
+                    val file = File(pluginDir, a.tojstring())
+                    if (!file.exists()) return LuaValue.valueOf("error:not_found")
+                    val key = "$pluginName::${a.tojstring()}"
+                    if (soundIds.containsKey(key)) return LuaValue.valueOf(key)
+                    val attrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    val sp = SoundPool.Builder().setMaxStreams(20).setAudioAttributes(attrs).build()
+                    soundLoaded[key] = false
+                    sp.setOnLoadCompleteListener { _, _, status -> soundLoaded[key] = status == 0 }
+                    soundIds[key] = sp.load(file.absolutePath, 1)
+                    soundPools[key] = sp
+                    LuaValue.valueOf(key)
+                } catch (e: Exception) { LuaValue.valueOf("error:${e.message}") }
+            }
+        })
+
+        // playSound(handle)
+        api.set("playSound", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                val key = a.tojstring()
+                if (soundLoaded[key] == true) soundPools[key]?.play(soundIds[key]!!, 1f, 1f, 1, 0, 1f)
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.hideImage()
-        api.set("hideImage", object : ZeroArgFunction() {
-            override fun call(): LuaValue {
-                mainHandler.post { hideImageCallback?.invoke() }
+        // stopSounds(handle)
+        api.set("stopSounds", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                val key = a.tojstring()
+                soundPools[key]?.autoPause()
+                soundPools[key]?.autoResume()
                 return LuaValue.NIL
             }
         })
 
-        // ── VIDEO OVERLAY ─────────────────────────────────────────────────────
-        // Launcher.showVideo("assets/vid.mp4", loop?)
-        api.set("showVideo", object : TwoArgFunction() {
-            override fun call(a: LuaValue, b: LuaValue): LuaValue {
-                val file = File(pluginDir, a.tojstring())
-                val loop = !b.isnil() && b.toboolean()
-                if (file.exists()) mainHandler.post { showVideoCallback?.invoke(file, loop) }
-                else mainHandler.post { terminalCallback?.invoke("showVideo: not found: ${a.tojstring()}", "error") }
-                return LuaValue.NIL
-            }
-        })
-
-        // Launcher.hideVideo()
-        api.set("hideVideo", object : ZeroArgFunction() {
-            override fun call(): LuaValue {
-                mainHandler.post { hideVideoCallback?.invoke() }
-                return LuaValue.NIL
-            }
-        })
-
-        // ── HTTP ──────────────────────────────────────────────────────────────
-        // Launcher.http(url, method, headersTable, body) -> {code, body}
+        // http(url, method, headers, body) -> {code, body}
         api.set("http", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 return try {
@@ -347,9 +373,8 @@ class PluginManager(private val context: Context) {
                     val headers = args.arg(3)
                     val bodyArg = args.arg(4)
                     val body    = if (bodyArg.isnil()) null else bodyArg.tojstring()
-
-                    val conn = (java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection).also {
-                        it.requestMethod  = method
+                    val conn = (URL(urlStr).openConnection() as HttpURLConnection).also {
+                        it.requestMethod = method
                         it.connectTimeout = 15000
                         it.readTimeout    = 30000
                     }
@@ -377,35 +402,7 @@ class PluginManager(private val context: Context) {
             }
         })
 
-        // ── TOAST ─────────────────────────────────────────────────────────────
-        // Launcher.toast("message")
-        api.set("toast", object : OneArgFunction() {
-            override fun call(a: LuaValue): LuaValue {
-                val msg = a.tojstring()
-                mainHandler.post { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show() }
-                return LuaValue.NIL
-            }
-        })
-
-        // ── VIBRATE ───────────────────────────────────────────────────────────
-        // Launcher.vibrate(ms)
-        api.set("vibrate", object : OneArgFunction() {
-            override fun call(a: LuaValue): LuaValue {
-                val ms = a.tolong()
-                try {
-                    val vib = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as android.os.Vibrator
-                    if (android.os.Build.VERSION.SDK_INT >= 26) {
-                        vib.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                    } else {
-                        @Suppress("DEPRECATION") vib.vibrate(ms)
-                    }
-                } catch (_: Exception) {}
-                return LuaValue.NIL
-            }
-        })
-
-        // ── TYPEWRITER ────────────────────────────────────────────────────────
-        // Launcher.typewrite(text, delayMs, onChar, onWord, onDone)
+        // typewrite(text, delayMs, onChar, onWord, onDone)
         api.set("typewrite", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 val text     = args.arg(1).tojstring()
@@ -413,18 +410,16 @@ class PluginManager(private val context: Context) {
                 val onCharFn = args.arg(3).takeIf { it is LuaFunction } as? LuaFunction
                 val onWordFn = args.arg(4).takeIf { it is LuaFunction } as? LuaFunction
                 val onDoneFn = args.arg(5).takeIf { it is LuaFunction } as? LuaFunction
-
                 typewriterJobs[pluginName]?.forEach { mainHandler.removeCallbacks(it) }
                 typewriterJobs[pluginName] = mutableListOf()
-
                 var wordBuf = StringBuilder()
                 for ((i, ch) in text.withIndex()) {
+                    val idx = i
                     val r = Runnable {
                         wordBuf.append(ch)
                         try { onCharFn?.call(LuaValue.valueOf(ch.toString())) } catch (_: Exception) {}
-                        val isEnd = i == text.length - 1
-                        if (ch == ' ' || ch == '
-' || isEnd) {
+                        val isEnd = idx == text.length - 1
+                        if (ch == ' ' || ch == '\n' || isEnd) {
                             val word = wordBuf.toString().trim()
                             if (word.isNotEmpty()) try { onWordFn?.call(LuaValue.valueOf(word)) } catch (_: Exception) {}
                             wordBuf.clear()
@@ -432,13 +427,13 @@ class PluginManager(private val context: Context) {
                         if (isEnd) try { onDoneFn?.call() } catch (_: Exception) {}
                     }
                     typewriterJobs[pluginName]?.add(r)
-                    mainHandler.postDelayed(r, i * delayMs)
+                    mainHandler.postDelayed(r, idx * delayMs)
                 }
                 return LuaValue.NIL
             }
         })
 
-        // Launcher.cancelTypewrite()
+        // cancelTypewrite()
         api.set("cancelTypewrite", object : ZeroArgFunction() {
             override fun call(): LuaValue {
                 typewriterJobs[pluginName]?.forEach { mainHandler.removeCallbacks(it) }
@@ -447,36 +442,7 @@ class PluginManager(private val context: Context) {
             }
         })
 
-        // ── PREFS (plugin-scoped persistent storage) ──────────────────────────
-        // Launcher.setPref("key", "value")
-        api.set("setPref", object : TwoArgFunction() {
-            override fun call(a: LuaValue, b: LuaValue): LuaValue {
-                context.getSharedPreferences("plugin_$pluginName", android.content.Context.MODE_PRIVATE)
-                    .edit().putString(a.tojstring(), b.tojstring()).apply()
-                return LuaValue.NIL
-            }
-        })
-
-        // Launcher.getPref("key", "default") -> string
-        api.set("getPref", object : TwoArgFunction() {
-            override fun call(a: LuaValue, b: LuaValue): LuaValue {
-                val def = if (b.isnil()) "" else b.tojstring()
-                val v = context.getSharedPreferences("plugin_$pluginName", android.content.Context.MODE_PRIVATE)
-                    .getString(a.tojstring(), def) ?: def
-                return LuaValue.valueOf(v)
-            }
-        })
-
-        // ── RANDOM ────────────────────────────────────────────────────────────
-        // Launcher.random(min, max) -> int
-        api.set("random", object : TwoArgFunction() {
-            override fun call(a: LuaValue, b: LuaValue): LuaValue {
-                val min = a.toint(); val max = b.toint()
-                return LuaValue.valueOf((min..max).random())
-            }
-        })
-
-        // ── API VERSION ───────────────────────────────────────────────────────
+        // apiVersion()
         api.set("apiVersion", object : ZeroArgFunction() {
             override fun call(): LuaValue = LuaValue.valueOf(LAUNCHER_API_VERSION)
         })
@@ -484,7 +450,7 @@ class PluginManager(private val context: Context) {
         globals.set("Launcher", api)
     }
 
-    // ── EXECUTE PLUGIN COMMAND ────────────────────────────────────────────────
+    // ── EXECUTE COMMAND ───────────────────────────────────────────────────────
 
     fun executeCommand(cmdName: String, args: List<String>): Boolean {
         val cmd = commands[cmdName.lowercase()] ?: return false
@@ -508,9 +474,10 @@ class PluginManager(private val context: Context) {
         return Pair(true, "plugin '${plugin.name}' deleted.")
     }
 
-    fun release() { mediaPlayer?.release(); mediaPlayer = null }
+    fun release() {
+        soundPools.values.forEach { it.release() }
+        soundPools.clear(); soundIds.clear(); soundLoaded.clear()
+        typewriterJobs.values.forEach { list -> list.forEach { mainHandler.removeCallbacks(it) } }
+        typewriterJobs.clear()
+    }
 }
-
-
-// ── EXTENSION: RICH PLUGIN API ────────────────────────────────────────────────
-// Injected separately so base PluginManager stays clean
