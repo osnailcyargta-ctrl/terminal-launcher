@@ -16,7 +16,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipInputStream
 
-const val LAUNCHER_API_VERSION = 1
+const val LAUNCHER_API_VERSION = 2
 
 enum class HookEvent {
     ON_COMMAND, ON_KEYPRESS, ON_OPEN_SETTING, ON_PRINT,
