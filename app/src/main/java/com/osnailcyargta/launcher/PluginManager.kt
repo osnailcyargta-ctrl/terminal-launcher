@@ -282,6 +282,205 @@ class PluginManager(private val context: Context) {
             override fun call(): LuaValue = LuaValue.valueOf(LAUNCHER_API_VERSION)
         })
 
+
+        // ── TIMER / DELAY ─────────────────────────────────────────────────────
+        // Launcher.delay(ms, fn) — run fn after ms milliseconds on main thread
+        api.set("delay", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val ms = a.tolong()
+                if (b is LuaFunction) {
+                    val fn = b
+                    mainHandler.postDelayed({ try { fn.call() } catch (_: Exception) {} }, ms)
+                }
+                return LuaValue.NIL
+            }
+        })
+
+        // ── IMAGE OVERLAY ─────────────────────────────────────────────────────
+        // Launcher.showImage("assets/img.png", autoHideMs?)
+        // autoHideMs = 0 means manual hide only
+        api.set("showImage", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val file = File(pluginDir, a.tojstring())
+                val autoHide = if (b.isnil()) 0L else b.tolong()
+                if (file.exists()) mainHandler.post { showImageCallback?.invoke(file, autoHide) }
+                else mainHandler.post { terminalCallback?.invoke("showImage: not found: ${a.tojstring()}", "error") }
+                return LuaValue.NIL
+            }
+        })
+
+        // Launcher.hideImage()
+        api.set("hideImage", object : ZeroArgFunction() {
+            override fun call(): LuaValue {
+                mainHandler.post { hideImageCallback?.invoke() }
+                return LuaValue.NIL
+            }
+        })
+
+        // ── VIDEO OVERLAY ─────────────────────────────────────────────────────
+        // Launcher.showVideo("assets/vid.mp4", loop?)
+        api.set("showVideo", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val file = File(pluginDir, a.tojstring())
+                val loop = !b.isnil() && b.toboolean()
+                if (file.exists()) mainHandler.post { showVideoCallback?.invoke(file, loop) }
+                else mainHandler.post { terminalCallback?.invoke("showVideo: not found: ${a.tojstring()}", "error") }
+                return LuaValue.NIL
+            }
+        })
+
+        // Launcher.hideVideo()
+        api.set("hideVideo", object : ZeroArgFunction() {
+            override fun call(): LuaValue {
+                mainHandler.post { hideVideoCallback?.invoke() }
+                return LuaValue.NIL
+            }
+        })
+
+        // ── HTTP ──────────────────────────────────────────────────────────────
+        // Launcher.http(url, method, headersTable, body) -> {code, body}
+        api.set("http", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                return try {
+                    val urlStr  = args.arg(1).tojstring()
+                    val method  = args.arg(2).optjstring("GET").uppercase()
+                    val headers = args.arg(3)
+                    val bodyArg = args.arg(4)
+                    val body    = if (bodyArg.isnil()) null else bodyArg.tojstring()
+
+                    val conn = (java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection).also {
+                        it.requestMethod  = method
+                        it.connectTimeout = 15000
+                        it.readTimeout    = 30000
+                    }
+                    if (headers is LuaTable) {
+                        var k = headers.next(LuaValue.NIL)
+                        while (!k.arg1().isnil()) {
+                            conn.setRequestProperty(k.arg1().tojstring(), k.arg(2).tojstring())
+                            k = headers.next(k.arg1())
+                        }
+                    }
+                    if (body != null) { conn.doOutput = true; conn.outputStream.use { it.write(body.toByteArray()) } }
+                    val code = conn.responseCode
+                    val resp = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText() ?: ""
+                    conn.disconnect()
+                    val result = LuaTable()
+                    result.set("code", LuaValue.valueOf(code))
+                    result.set("body", LuaValue.valueOf(resp))
+                    result
+                } catch (e: Exception) {
+                    val result = LuaTable()
+                    result.set("code", LuaValue.valueOf(-1))
+                    result.set("body", LuaValue.valueOf(e.message ?: "error"))
+                    result
+                }
+            }
+        })
+
+        // ── TOAST ─────────────────────────────────────────────────────────────
+        // Launcher.toast("message")
+        api.set("toast", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                val msg = a.tojstring()
+                mainHandler.post { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show() }
+                return LuaValue.NIL
+            }
+        })
+
+        // ── VIBRATE ───────────────────────────────────────────────────────────
+        // Launcher.vibrate(ms)
+        api.set("vibrate", object : OneArgFunction() {
+            override fun call(a: LuaValue): LuaValue {
+                val ms = a.tolong()
+                try {
+                    val vib = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                    if (android.os.Build.VERSION.SDK_INT >= 26) {
+                        vib.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                    } else {
+                        @Suppress("DEPRECATION") vib.vibrate(ms)
+                    }
+                } catch (_: Exception) {}
+                return LuaValue.NIL
+            }
+        })
+
+        // ── TYPEWRITER ────────────────────────────────────────────────────────
+        // Launcher.typewrite(text, delayMs, onChar, onWord, onDone)
+        api.set("typewrite", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val text     = args.arg(1).tojstring()
+                val delayMs  = args.arg(2).optlong(50)
+                val onCharFn = args.arg(3).takeIf { it is LuaFunction } as? LuaFunction
+                val onWordFn = args.arg(4).takeIf { it is LuaFunction } as? LuaFunction
+                val onDoneFn = args.arg(5).takeIf { it is LuaFunction } as? LuaFunction
+
+                typewriterJobs[pluginName]?.forEach { mainHandler.removeCallbacks(it) }
+                typewriterJobs[pluginName] = mutableListOf()
+
+                var wordBuf = StringBuilder()
+                for ((i, ch) in text.withIndex()) {
+                    val r = Runnable {
+                        wordBuf.append(ch)
+                        try { onCharFn?.call(LuaValue.valueOf(ch.toString())) } catch (_: Exception) {}
+                        val isEnd = i == text.length - 1
+                        if (ch == ' ' || ch == '
+' || isEnd) {
+                            val word = wordBuf.toString().trim()
+                            if (word.isNotEmpty()) try { onWordFn?.call(LuaValue.valueOf(word)) } catch (_: Exception) {}
+                            wordBuf.clear()
+                        }
+                        if (isEnd) try { onDoneFn?.call() } catch (_: Exception) {}
+                    }
+                    typewriterJobs[pluginName]?.add(r)
+                    mainHandler.postDelayed(r, i * delayMs)
+                }
+                return LuaValue.NIL
+            }
+        })
+
+        // Launcher.cancelTypewrite()
+        api.set("cancelTypewrite", object : ZeroArgFunction() {
+            override fun call(): LuaValue {
+                typewriterJobs[pluginName]?.forEach { mainHandler.removeCallbacks(it) }
+                typewriterJobs[pluginName]?.clear()
+                return LuaValue.NIL
+            }
+        })
+
+        // ── PREFS (plugin-scoped persistent storage) ──────────────────────────
+        // Launcher.setPref("key", "value")
+        api.set("setPref", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                context.getSharedPreferences("plugin_$pluginName", android.content.Context.MODE_PRIVATE)
+                    .edit().putString(a.tojstring(), b.tojstring()).apply()
+                return LuaValue.NIL
+            }
+        })
+
+        // Launcher.getPref("key", "default") -> string
+        api.set("getPref", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val def = if (b.isnil()) "" else b.tojstring()
+                val v = context.getSharedPreferences("plugin_$pluginName", android.content.Context.MODE_PRIVATE)
+                    .getString(a.tojstring(), def) ?: def
+                return LuaValue.valueOf(v)
+            }
+        })
+
+        // ── RANDOM ────────────────────────────────────────────────────────────
+        // Launcher.random(min, max) -> int
+        api.set("random", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val min = a.toint(); val max = b.toint()
+                return LuaValue.valueOf((min..max).random())
+            }
+        })
+
+        // ── API VERSION ───────────────────────────────────────────────────────
+        api.set("apiVersion", object : ZeroArgFunction() {
+            override fun call(): LuaValue = LuaValue.valueOf(LAUNCHER_API_VERSION)
+        })
+
         globals.set("Launcher", api)
     }
 
@@ -311,3 +510,7 @@ class PluginManager(private val context: Context) {
 
     fun release() { mediaPlayer?.release(); mediaPlayer = null }
 }
+
+
+// ── EXTENSION: RICH PLUGIN API ────────────────────────────────────────────────
+// Injected separately so base PluginManager stays clean
