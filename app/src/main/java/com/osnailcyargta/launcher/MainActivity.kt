@@ -39,11 +39,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var wallpaperView: ImageView
     private var imageOverlay: android.widget.FrameLayout? = null
     private var videoOverlay: android.widget.FrameLayout? = null
-    private var liveWallpaperView: android.widget.VideoView? = null
-    private var sensorManager: android.hardware.SensorManager? = null
-    private var gyroListener: android.hardware.SensorEventListener? = null
-    private var secretStep = 0  // 0=none, 1=waiting pls alow me
-    private var featuresUnlocked = false
     private lateinit var pluginManager: PluginManager
 
     private var allApps: List<AppInfo> = emptyList()
@@ -88,7 +83,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val REQ_PICK_IMAGE  = 101
         const val REQ_PICK_PLUGIN = 102
-        const val REQ_PICK_VIDEO  = 103
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -126,14 +120,8 @@ class MainActivity : AppCompatActivity() {
         pluginManager.hideVideoCallback  = { hideVideoOverlay() }
         pluginManager.init()
 
-        sensorManager = getSystemService(SENSOR_SERVICE) as? android.hardware.SensorManager
-        featuresUnlocked = prefs.getBoolean("features_unlocked", false)
         applyTheme()
         loadWallpaper()
-        if (featuresUnlocked) {
-            loadLiveWallpaper()
-            startGyro()
-        }
         startClock()
         setupInput()
         boot()
@@ -185,19 +173,16 @@ class MainActivity : AppCompatActivity() {
         try { unregisterReceiver(packageReceiver) } catch (_: Exception) {}
         handler.removeCallbacksAndMessages(null)
         pluginManager.release()
-        stopGyro()
     }
 
     override fun onPause() {
         super.onPause()
-        stopGyro()
     }
 
     override fun onResume() {
         super.onResume()
         if (!appsLoaded) loadApps()
         etInput.requestFocus()
-        if (featuresUnlocked) startGyro()
     }
 
     // ── PREFS ─────────────────────────────────────────────────────────────────
@@ -293,19 +278,6 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             REQ_PICK_IMAGE -> if (resultCode == Activity.RESULT_OK) data?.data?.let { setWallpaperFromUri(it) }
-            REQ_PICK_VIDEO -> if (resultCode == Activity.RESULT_OK) {
-                data?.data?.let { uri ->
-                    try {
-                        val tmp = File(filesDir, "live_wallpaper.mp4")
-                        contentResolver.openInputStream(uri)?.use { inp -> tmp.outputStream().use { o -> inp.copyTo(o) } }
-                        prefs.edit().putString("live_wp", tmp.absolutePath).apply()
-                        loadLiveWallpaper()
-                        printLine("live wallpaper set.", "success"); printBlank(); scrollBottom()
-                    } catch (e: Exception) {
-                        printLine("failed: ${e.message}", "error"); printBlank(); scrollBottom()
-                    }
-                }
-            }
             REQ_PICK_PLUGIN -> if (resultCode == Activity.RESULT_OK) {
                 data?.data?.let { uri ->
                     try {
@@ -357,12 +329,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun boot() {
         pluginManager.fireHook(HookEvent.ON_BOOT)
-        listOf(
+        val customMsg = prefs.getString("boot_message", "").orEmpty().trim()
+        val animOn    = prefs.getBoolean("boot_anim", true)
+        val step      = if (animOn) 60L else 0L
+        val header    = if (customMsg.isNotEmpty()) customMsg else "PERSONAL LAUNCHER  v6.0"
+        val lines = listOf(
             "──────────────────────────────" to "system",
-            "  PERSONAL LAUNCHER  v5.0"     to "system",
+            "  $header"                       to "system",
             "──────────────────────────────" to "system",
-        ).forEachIndexed { i, (t, c) ->
-            handler.postDelayed({ printLine(t, c) }, i * 60L)
+        )
+        lines.forEachIndexed { i, (t, c) ->
+            handler.postDelayed({ printLine(t, c) }, i * step)
         }
         handler.postDelayed({
             printBlank()
@@ -373,7 +350,7 @@ class MainActivity : AppCompatActivity() {
                 if (bad > 0) printLine("$bad plugin(s) failed — check 'plugin.set list'", "warn")
                 printBlank()
             }
-        }, 3 * 60L)
+        }, lines.size * step + 80L)
     }
 
     // ── APP LOADING ───────────────────────────────────────────────────────────
@@ -477,26 +454,6 @@ class MainActivity : AppCompatActivity() {
                 val name = raw.substring(11, raw.length - 7).trim()
                 val (ok, msg) = pluginManager.deletePlugin(name)
                 printLine(msg, if (ok) "success" else "error")
-            }
-            lower == "/allow user" -> {
-                // Secret step 1 - fake error
-                secretStep = 1
-                printLine("error: permission denied. access restricted.", "error")
-                printLine("unauthorized command detected.", "error")
-            }
-            lower == "pls allow me" && secretStep == 1 -> {
-                secretStep = 0
-                featuresUnlocked = true
-                prefs.edit().putBoolean("features_unlocked", true).apply()
-                printLine("", "output")
-                printLine("....", "system")
-                printLine("access granted.", "success")
-                printLine("gyroscope wallpaper: unlocked", "success")
-                printLine("live wallpaper (video): unlocked", "success")
-                printLine("", "output")
-                printLine("configure in: setting", "info")
-                loadLiveWallpaper()
-                startGyro()
             }
             else -> printLine("unknown: $raw", "error")
         }
@@ -863,6 +820,30 @@ class MainActivity : AppCompatActivity() {
             startActivityForResult(intent, REQ_PICK_PLUGIN)
         }
 
+        // Boot message
+        val bootMsg = prefs.getString("boot_message", "").orEmpty()
+        row("custom boot message", if (bootMsg.isEmpty()) "default" else bootMsg) {
+            dismissOverlay(overlay)
+            showTextInputOverlay(
+                label    = "boot message",
+                current  = bootMsg,
+                hint     = "leave empty for default",
+                onApply  = { v ->
+                    prefs.edit().putString("boot_message", v.trim()).apply()
+                    printLine("boot message set.", "success"); printBlank(); scrollBottom()
+                }
+            )
+        }
+
+        // Boot animation toggle
+        val bootAnim = prefs.getBoolean("boot_anim", true)
+        row("boot animation", if (bootAnim) "on" else "off") {
+            val newVal = !prefs.getBoolean("boot_anim", true)
+            prefs.edit().putBoolean("boot_anim", newVal).apply()
+            dismissOverlay(overlay)
+            printLine("boot animation: ${if (newVal) "on" else "off"}", "success"); printBlank(); scrollBottom()
+        }
+
         // Plugin settings (from plugins)
         if (pluginManager.settings.isNotEmpty()) {
             card.addView(monoTV("plugin settings", 10f, dim(txtColor,0.35f)).also { it.setPadding(dp16,(dp8+4),dp16,dp8/2) })
@@ -873,48 +854,6 @@ class MainActivity : AppCompatActivity() {
                     showPluginSettingInput(setting)
                 }
             }
-        }
-
-        // Unlocked features
-        if (featuresUnlocked) {
-            card.addView(monoTV("── unlocked features ──", 10f, dim(txtColor, 0.3f)).also {
-                it.setPadding(dp16, dp8, dp16, (4*dp).toInt())
-            })
-            card.addView(makeDivider(dp))
-
-            // Live wallpaper video
-            val lvLabel = if (prefs.getString("live_wp", null) != null) "change live wallpaper (video)" else "set live wallpaper (video)"
-            row(lvLabel, if (prefs.getString("live_wp", null) != null) "active" else "none") {
-                dismissOverlay(overlay)
-                startActivityForResult(Intent(Intent.ACTION_PICK).also { it.type = "video/*" }, REQ_PICK_VIDEO)
-            }
-            if (prefs.getString("live_wp", null) != null) {
-                row("remove live wallpaper", "restore background") {
-                    dismissOverlay(overlay); removeLiveWallpaper()
-                }
-            }
-
-            // Gyroscope sensitivity
-            val gyroRow = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; setPadding(dp16, dp12, dp16, dp12)
-            }
-            gyroRow.addView(monoTV("gyroscope sensitivity", 10f, dim(txtColor, 0.35f)))
-            val gyroVal = prefs.getFloat("gyro_sensitivity", 8f)
-            gyroRow.addView(SeekBar(this).apply {
-                max = 20; progress = gyroVal.toInt()
-                progressDrawable?.setColorFilter(txtColor, PorterDuff.Mode.SRC_IN)
-                thumb?.setColorFilter(txtColor, PorterDuff.Mode.SRC_IN)
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = (4*dp).toInt() }
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(sb: SeekBar?, p: Int, fu: Boolean) {
-                        if (fu) { prefs.edit().putFloat("gyro_sensitivity", p.toFloat()).apply() }
-                    }
-                    override fun onStartTrackingTouch(sb: SeekBar?) {}
-                    override fun onStopTrackingTouch(sb: SeekBar?) {}
-                })
-            })
-            card.addView(gyroRow)
-            card.addView(makeDivider(dp))
         }
 
         card.addView(monoTV("close", 12f, dim(txtColor,0.4f)).apply {
@@ -928,6 +867,41 @@ class MainActivity : AppCompatActivity() {
         (window.decorView as ViewGroup).addView(overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         card.alpha=0f; card.translationY=24f*dp
         card.animate().alpha(1f).translationY(0f).setDuration(200).setInterpolator(DecelerateInterpolator()).start()
+    }
+
+    private fun showTextInputOverlay(label: String, current: String, hint: String = "", onApply: (String) -> Unit) {
+        val dp = resources.displayMetrics.density
+        val dp8=(8*dp).toInt(); val dp12=(12*dp).toInt(); val dp16=(16*dp).toInt()
+
+        val overlay = FrameLayout(this).also { it.setBackgroundColor(Color.parseColor("#CC000000")) }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply { setColor(darken(bgColor,12)); cornerRadius=10f*dp; setStroke((1*dp).toInt(),dim(txtColor,0.25f)) }
+            setPadding(dp16, dp12, dp16, dp12)
+        }
+        card.addView(monoTV(label, 11f, dim(txtColor,0.5f)).also {
+            it.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { lp -> lp.bottomMargin=dp8 }
+        })
+        val et = EditText(this).apply {
+            typeface = Typeface.MONOSPACE; textSize = 13f; setTextColor(txtColor)
+            setHintTextColor(dim(txtColor,0.3f)); this.hint = hint; setText(current)
+            background = GradientDrawable().apply { setColor(darken(bgColor,18)); cornerRadius=4f*dp; setStroke((1*dp).toInt(),dim(txtColor,0.2f)) }
+            setPadding(dp8,dp8,dp8,dp8)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.bottomMargin=dp8 }
+        }
+        card.addView(et)
+        val btnRow = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END }
+        btnRow.addView(monoTV("cancel", 13f, dim(txtColor,0.4f)).apply { setPadding(dp16,dp8,dp8,dp8); setOnClickListener { dismissOverlay(overlay) } })
+        btnRow.addView(monoTV("apply", 13f, txtColor).apply {
+            setPadding(dp16,dp8,dp8,dp8)
+            setOnClickListener { dismissOverlay(overlay); onApply(et.text.toString()) }
+        })
+        card.addView(btnRow)
+        val lp = FrameLayout.LayoutParams((290*dp).toInt(), FrameLayout.LayoutParams.WRAP_CONTENT); lp.gravity=Gravity.CENTER
+        overlay.addView(card,lp); overlay.setOnClickListener {}
+        (window.decorView as ViewGroup).addView(overlay, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        card.alpha=0f; card.scaleX=0.9f; card.scaleY=0.9f
+        card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(DecelerateInterpolator()).start()
     }
 
     private fun showPluginSettingInput(setting: PluginSetting) {
@@ -1080,113 +1054,6 @@ class MainActivity : AppCompatActivity() {
     private fun dim(color: Int, f: Float) = Color.argb((Color.alpha(color)*f).toInt().coerceIn(0,255),Color.red(color),Color.green(color),Color.blue(color))
     private fun darken(color: Int, amt: Int) = Color.rgb((Color.red(color)+amt).coerceIn(0,255),(Color.green(color)+amt).coerceIn(0,255),(Color.blue(color)+amt).coerceIn(0,255))
     private fun colorHex(color: Int) = String.format("#%06X", 0xFFFFFF and color)
-
-    // ── LIVE WALLPAPER ───────────────────────────────────────────────────────
-
-    private fun loadLiveWallpaper() {
-        val path = prefs.getString("live_wp", null) ?: return
-        val file = File(path)
-        if (!file.exists()) return
-        removeLiveWallpaperView()
-
-        // Black background container
-        val container = android.widget.FrameLayout(this)
-        container.setBackgroundColor(android.graphics.Color.BLACK)
-
-        val vv = android.widget.VideoView(this)
-        vv.setVideoURI(android.net.Uri.fromFile(file))
-        vv.setOnPreparedListener { mp ->
-            mp.isLooping = true
-            mp.setVolume(0f, 0f)
-            // Scale video to fill height, center horizontally (fullscreen centered)
-            val videoW = mp.videoWidth.toFloat()
-            val videoH = mp.videoHeight.toFloat()
-            if (videoW > 0 && videoH > 0) {
-                val screenW = resources.displayMetrics.widthPixels.toFloat()
-                val screenH = resources.displayMetrics.heightPixels.toFloat()
-                val scaleH = screenH / videoH
-                val scaledW = (videoW * scaleH).toInt()
-                val scaledH = screenH.toInt()
-                val lp = android.widget.FrameLayout.LayoutParams(scaledW, scaledH)
-                lp.gravity = android.view.Gravity.CENTER
-                vv.layoutParams = lp
-            }
-            vv.start()
-        }
-
-        val containerLp = android.widget.FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        )
-        container.addView(vv, android.widget.FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ))
-
-        val termFrame = scrollView.parent as? android.widget.FrameLayout
-        termFrame?.addView(container, 0, containerLp)
-        container.alpha = wallpaperAlpha
-        liveWallpaperView = vv
-    }
-
-    private fun removeLiveWallpaper() {
-        prefs.edit().remove("live_wp").apply()
-        File(filesDir, "live_wallpaper.mp4").delete()
-        removeLiveWallpaperView()
-        printLine("live wallpaper removed.", "success"); printBlank(); scrollBottom()
-    }
-
-    private fun removeLiveWallpaperView() {
-        liveWallpaperView?.let { (it.parent as? ViewGroup)?.removeView(it) }
-        liveWallpaperView = null
-    }
-
-    // ── GYROSCOPE ────────────────────────────────────────────────────────────
-
-    private var gyroOffsetX = 0f
-    private var gyroOffsetY = 0f
-    private var gyroCalibrated = false
-
-    private fun startGyro() {
-        val sm = sensorManager ?: return
-        // Use accelerometer for tilt-based parallax (works on all devices)
-        val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER) ?: return
-        gyroCalibrated = false
-        gyroListener = object : android.hardware.SensorEventListener {
-            override fun onSensorChanged(event: android.hardware.SensorEvent) {
-                val ax = event.values[0]  // tilt left/right
-                val ay = event.values[1]  // tilt up/down
-
-                // Calibrate on first reading
-                if (!gyroCalibrated) {
-                    gyroOffsetX = ax
-                    gyroOffsetY = ay
-                    gyroCalibrated = true
-                    return
-                }
-
-                val sensitivity = prefs.getFloat("gyro_sensitivity", 8f)
-                val dx = -(ax - gyroOffsetX) * sensitivity
-                val dy = (ay - gyroOffsetY) * sensitivity
-
-                val maxShift = 60f
-                val tx = dx.coerceIn(-maxShift, maxShift)
-                val ty = dy.coerceIn(-maxShift, maxShift)
-
-                wallpaperView.translationX = tx
-                wallpaperView.translationY = ty
-                liveWallpaperView?.parent?.let { p ->
-                    (p as? android.view.View)?.translationX = tx
-                    (p as? android.view.View)?.translationY = ty
-                }
-            }
-            override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) {}
-        }
-        sm.registerListener(gyroListener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
-    }
-
-    private fun stopGyro() {
-        gyroListener?.let { sensorManager?.unregisterListener(it) }
-        gyroListener = null
-    }
 
     private fun showImageOverlay(file: java.io.File, autoHideMs: Long) {
         hideImageOverlay()
