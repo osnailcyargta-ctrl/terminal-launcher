@@ -345,11 +345,12 @@ class PluginManager(private val context: Context) {
             }
         })
 
-        // playSound(handle)
-        api.set("playSound", object : OneArgFunction() {
-            override fun call(a: LuaValue): LuaValue {
-                val key = a.tojstring()
-                if (soundLoaded[key] == true) soundPools[key]?.play(soundIds[key]!!, 1f, 1f, 1, 0, 1f)
+        // playSound(handle, rate?)  rate default 1.0, 1.2 = 20% faster
+        api.set("playSound", object : TwoArgFunction() {
+            override fun call(a: LuaValue, b: LuaValue): LuaValue {
+                val key  = a.tojstring()
+                val rate = if (b.isnil()) 1.0f else b.tofloat().coerceIn(0.5f, 2.0f)
+                if (soundLoaded[key] == true) soundPools[key]?.play(soundIds[key]!!, 1f, 1f, 1, 0, rate)
                 return LuaValue.NIL
             }
         })
